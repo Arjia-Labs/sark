@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sark",
+  "main": "src/index.ts",
+  // Set CLOUDFLARE_ACCOUNT_ID in your environment, or add "account_id" here.
+  "compatibility_date": "2024-12-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  "vars": {
+    // Box template to fork per thread. Leave empty to create a fresh box instead.
+    "TEMPLATE_BOX_ID": "",
+    "BOX_BASE_URL": "https://ascii.dev/api/box/v1",
+    // Public origin of this worker; the box needs it to reach /mcp.
+    "PUBLIC_URL": "https://<your-worker>.workers.dev",
+    "BOX_PROVIDER": "claude-code",
+    "BOX_MODEL": "",
+    "BOX_TTL_SECONDS": "3600",
+    "IDLE_STOP_SECONDS": "900",
+    "PROMPT_HARD_CAP_SECONDS": "1200",
+    // Comma-separated Slack IDs. Empty = deny (fail closed).
+    // ALLOWED_CHANNELS: "C0123456789,C0987654321"  ALLOWED_TEAMS: "T0123456789"
+    "ALLOWED_CHANNELS": "",
+    "ALLOWED_USERS": "",
+    "ALLOWED_TEAMS": ""
+  },
+
+  "durable_objects": {
+    "bindings": [{ "name": "THREAD_SESSIONS", "class_name": "ThreadSession" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ThreadSession"] }]
+}

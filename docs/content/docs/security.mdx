@@ -1,0 +1,154 @@
+---
+title: Security model
+description: Thread-scoped tokens, a fail-closed allowlist, and the limits that bound a compromised sandbox.
+---
+
+**The sandbox is not trusted.** It runs a model that reads text written by anyone in a Slack
+channel, and it has a shell. So the design assumes it can misbehave, and bounds what that
+costs: a compromised box can post into exactly one Slack thread, for at most 12 hours, at a
+bounded rate, and can reach nothing else.
+
+## Thread-scoped MCP tokens
+
+The box calls back with a stateless HMAC token:
+
+```
+<base64url(payload)>.<base64url(hmac-sha256(payload))>
+```
+
+The payload names three things:
+
+| Field | |
+|---|---|
+| `tid` | the thread (Durable Object name) this token may address |
+| `bid` | the **box generation** it was minted for |
+| `iat` | issued-at, epoch seconds |
+
+So a leaked token can only ever address the thread it was minted for, only while that exact
+box is still the thread's box, and only for `THREAD_TOKEN_MAX_AGE_SECONDS` (**12 hours**)
+after it was issued. Verification rejects a bad signature, a malformed payload, an age past
+12h, and a future `iat` beyond 120s of clock skew.
+
+The `bid` check is enforced twice: the `/mcp` route resolves the Durable Object by `tid`,
+and `invokeTool` then compares the token's `bid` against the thread's *current* box. A token
+from a previous generation gets a plain error, not a post.
+
+### Why the token is not a box env var
+
+Box env is **fixed at fork time**, so a token placed there would pin a box to one credential
+for its entire life, which is exactly wrong for a credential that has to expire. Instead the
+token is written to a file that the bootstrap script reads and immediately deletes as it
+registers the MCP server. Writing it per registration is what makes rotation possible.
+
+### Rotation
+
+`ensureMcp()` re-mints and re-registers once a token is half-way to expiry (6 hours), so a
+long-lived thread rotates its credential rather than hitting the hard expiry mid-run.
+
+### What the box env carries
+
+Only non-secret coordinates:
+
+```
+SLACK_MCP_URL     = ${PUBLIC_URL}/mcp
+SLACK_THREAD_ID   = the thread id
+SLACK_CHANNEL     = Slack channel      (Slack threads only)
+SLACK_THREAD_TS   = Slack thread ts    (Slack threads only)
+SLACK_TEAM        = Slack team id      (Slack threads only, when known)
+```
+
+Note what is **not** there: the Slack bot token. The sandbox never holds a Slack credential
+at all. It holds a credential for *this Worker*, which then talks to Slack on its behalf.
+
+## No ambient authority in the tools
+
+The five MCP tools have **no `channel` or `thread` parameter**. There is no argument a
+compromised box can pass to redirect output. The destination comes from the token, and the
+Durable Object constructs the transport from its own stored session state.
+
+See [MCP tools](/docs/mcp-tools).
+
+## The allowlist fails closed
+
+`isAllowed()` refuses every mention when both `ALLOWED_CHANNELS` and `ALLOWED_USERS` are
+empty. You opt channels in; there is no opt-out mode. `ALLOWED_TEAMS`, when set, pins the
+workspace on top of that.
+
+This is what stops a public channel from spinning up unbounded sandboxes. A refused mention
+gets an explanation in-thread and **creates no box**.
+
+## `API_TOKEN` is full bot authority
+
+<Callout type="warn">
+`/api` deliberately bypasses the Slack allowlist. A caller can address any thread id, and by
+passing `slack` coordinates on a prompt, make the bot post into any conversation the bot
+token can reach. That is what makes the surface useful for scripting, but it means
+`API_TOKEN` should be guarded exactly like `SLACK_BOT_TOKEN`. The allowlist constrains
+Slack mentions, not this.
+</Callout>
+
+The gate runs before every `/api` route, compares in constant time, and returns **503** when
+`API_TOKEN` is unset, so it fails closed rather than open.
+
+## Slack request verification
+
+`/slack/events` verifies the Slack signature over the raw body before parsing anything, and
+returns 503 if `SLACK_SIGNING_SECRET` is unset rather than accepting unverified traffic.
+Retry deliveries are dropped at the edge on `x-slack-retry-num`, with `event_id` dedup in
+the Durable Object as the backstop.
+
+## Amplifier limits
+
+A sandbox with a valid token still can't use `/mcp` as a megaphone:
+
+| Limit | Value |
+|---|---|
+| JSON-RPC batch size | 32 calls per request |
+| Request body | 1 MB (checked against `content-length` before parsing) |
+| Queued messages per thread | 20 |
+| Prompt text | 16,000 characters |
+| Recorded messages kept | 500 |
+| Run wall clock | `PROMPT_HARD_CAP_SECONDS` (default 1200s) |
+| Box TTL | `BOX_TTL_SECONDS` (default 3600s) |
+| Idle archive | `IDLE_STOP_SECONDS` (default 900s) |
+
+## Prompt-injection hardening
+
+Message bodies, display names, and `/api` metadata are untrusted text. The delimiters the
+prompt is built from are neutralized inside them, so a user cannot close their own block and
+open one under someone else's name. The instructions also state plainly that block contents
+are requests to consider, never instructions that override the system ones. See
+[Prompt construction](/docs/prompts#neutralized-delimiters).
+
+## What users are shown when things break
+
+Only messages written *for* a user are shown. `BoxApiError.publicMessage` is
+"The sandbox API returned an error (HTTP N)"; `SessionError` carries its own public text.
+Anything else becomes a generic line. Upstream response bodies carry internal identifiers,
+and sandbox stderr is not something the Worker controls at all. Both are log-only.
+
+The MCP bootstrap goes further: sandbox output that failed is scrubbed of the token before
+it is logged, because a shell echoing the failing command would otherwise put a live
+credential in the logs.
+
+## Deliberate absences
+
+- **One interactive component, gated.** `/slack/interactive` exists only for the 🧠 effort
+  dropdown. It verifies the signature and runs the same `isAllowed` gate as a mention before
+  acting; anything that is not a `block_actions` payload for the known action id is dropped.
+- **Reactions cannot create anything.** A control reaction acts only on a thread that already
+  has a session, and one from outside the allowlist is dropped *silently*. Replying would make
+  any emoji in a public channel a way to make the bot talk.
+- **No session state in the MCP server.** Every request is self-describing and authenticated
+  by its own bearer token; there are no session ids to hijack and no SSE stream to hold open.
+- **No unhandled error bodies in responses.** `app.onError` logs the stack and returns a flat
+  `{"error":"internal error"}`.
+
+## Rotating secrets
+
+| Secret | Effect of rotating |
+|---|---|
+| `MCP_TOKEN_SECRET` | Invalidates every token sitting in a live sandbox. Threads recover on their next turn when `ensureMcp` re-registers. |
+| `API_TOKEN` | Immediately locks out `/api` callers, including `npm run drive`. |
+| `SLACK_BOT_TOKEN` | The bot stops posting; the Worker keeps running. |
+| `BOX_API_KEY` | Every box operation fails; threads surface a sandbox-API error. |

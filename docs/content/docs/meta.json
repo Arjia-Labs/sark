@@ -1,0 +1,23 @@
+{
+  "title": "sark",
+  "pages": [
+    "index",
+    "---Get started---",
+    "getting-started",
+    "---How it works---",
+    "architecture",
+    "lifecycle",
+    "prompts",
+    "security",
+    "---Reference---",
+    "api",
+    "controls",
+    "mcp-tools",
+    "configuration",
+    "cli",
+    "---Background---",
+    "testing",
+    "operations",
+    "faq"
+  ]
+}

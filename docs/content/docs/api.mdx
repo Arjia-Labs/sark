@@ -1,0 +1,142 @@
+---
+title: Control API
+description: Six routes behind API_TOKEN that drive a thread with no Slack app at all.
+---
+
+All `/api` routes require `Authorization: Bearer $API_TOKEN` and fail closed (**503**) if
+`API_TOKEN` is unset.
+
+<Callout type="warn">
+**`API_TOKEN` is full bot authority.** `/api` deliberately bypasses the Slack allowlist: a
+caller can address any thread id, and by passing `slack` coordinates on a prompt, make the
+bot post into any conversation the bot token can reach. Guard it exactly like
+`SLACK_BOT_TOKEN`.
+</Callout>
+
+`{id}` is any opaque string, and it becomes the Durable Object name. Slack threads use
+`{team}:{channel}:{thread_ts}`, so a live Slack conversation can be inspected through this
+same API by passing that string.
+
+## `POST /api/threads/{id}/prompt`
+
+Does the same thing a mention does: enqueue a message for the thread.
+
+```bash
+curl -sX POST https://<your-worker>.workers.dev/api/threads/t1/prompt \
+  -H "Authorization: Bearer $API_TOKEN" -H 'content-type: application/json' \
+  -d '{"text":"run the tests","metadata":{"ticket":"ENG-42"}}'
+```
+
+| Field | | |
+|---|---|---|
+| `text` | **required** | The message. Over 16,000 characters → **413**. |
+| `user` | | Sender id, shown to the agent. |
+| `userName` | | Display name, shown to the agent. |
+| `metadata` | | Arbitrary object; every key is passed through into that message's context block. |
+| `transport` | | `"slack"` or `"memory"`. Defaults to `"slack"` if `slack` is present, else `"memory"`. |
+| `slack` | | `{team?, teamName?, channel, channelName?, threadTs, triggerTs?}`. Makes the bot post into a real Slack conversation. |
+| `timestamp` | | ISO time for the message. Defaults to now. |
+
+**Responses**
+
+| Status | |
+|---|---|
+| `202` | `{threadId, boxId?, queued}`. Accepted. |
+| `202` | `{threadId, boxId?, queued: 0, duplicate: true}`. Dropped as a duplicate `eventId`. |
+| `429` | `{..., rejected: "..."}`. The queue is full (20), so this is backpressure. |
+| `400` | `text` missing or blank. |
+| `413` | `text` longer than 16,000 characters. |
+
+## `GET /api/threads/{id}`
+
+Current state. Reading this also re-arms a stranded thread, so a poller heals it for free.
+
+```json
+{
+  "threadId": "t1",
+  "exists": true,
+  "transport": "memory",
+  "boxId": "box_7f21a9",
+  "boxState": "running",
+  "mcpRegistered": true,
+  "phase": "running",
+  "prompt": { "promptId": "p_…", "status": "running", "agentPosts": 1, "elapsedSeconds": 34 },
+  "queued": 0,
+  "lastError": null,
+  "lastActivityAt": 1754042412000,
+  "messageCount": 3
+}
+```
+
+`phase` is one of `idle`, `starting_box`, `waiting_box`, `bootstrapping`, `running`; see
+[Thread lifecycle](/docs/lifecycle#phases). `mcpRegistered` is true only when the
+registration belongs to the *current* box generation.
+
+## `GET /api/threads/{id}/messages?after=n`
+
+Everything the agent posted through MCP, as recorded by `MemoryTransport`.
+
+```json
+{ "messages": [{ "ts": "m1", "text": "…", "bot": true, "seq": 1 }], "count": 1 }
+```
+
+<Callout>
+`after` is a message **`seq`**, a monotonic per-thread sequence number, not an array
+index. The recorded log is trimmed to the last 500 entries, so array position is not a
+usable cursor; `seq` keeps increasing across that trim.
+</Callout>
+
+For a Slack-transport thread this log is empty: output went to Slack, not to the recorder.
+
+## `GET /api/threads/{id}/events?cursor=&type=`
+
+The raw Box event feed for the thread's box, for debugging. Returns up to 200 events in
+ascending order, with `pageInfo.nextCursor` for paging. `type` filters server-side (e.g.
+`type=response`). Returns `{events: [], pageInfo: null}` if the thread has no box.
+
+This is the same feed the [watchdog](/docs/lifecycle#the-watchdog) reads to recover a reply
+when the agent finishes without saying anything.
+
+## `POST /api/threads/{id}/interrupt`
+
+Stop the running agent. Kills the box's current run, deletes the run record, **clears the
+queue**, and sets the status message to `🛑 Interrupted.`
+
+```json
+{ "ok": true, "detail": "interrupted" }
+```
+
+Returns `{ok: false, detail: "no box for this thread"}` when there's nothing to stop. In
+Slack, typing `stop` (or `cancel` / `abort` / `halt`) as the whole message does this and
+also posts the outcome.
+
+## `DELETE /api/threads/{id}`
+
+Archive the sandbox and wipe the thread: stops the box (snapshotting it), deletes all
+Durable Object storage, and deletes the alarm.
+
+```json
+{ "ok": true, "boxId": "box_7f21a9" }
+```
+
+The next message on that thread id starts a completely fresh session.
+
+## `GET /health`
+
+No auth.
+
+```json
+{ "ok": true, "slack": true, "template": "box_…", "provider": "claude-code" }
+```
+
+`slack` is true only when **both** `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` are set.
+
+## Other routes
+
+| Route | |
+|---|---|
+| `POST /slack/events` | The Slack event sink. 503 without `SLACK_SIGNING_SECRET`. See [Connect Slack](/docs/getting-started/slack). |
+| `ALL /mcp` | The agent's callback. Thread-scoped bearer token; `GET`/`DELETE` return 405. See [MCP tools](/docs/mcp-tools). |
+
+Unknown paths return `404 {"error":"not found"}`; unhandled errors return
+`500 {"error":"internal error"}` with the stack in the Worker logs only.

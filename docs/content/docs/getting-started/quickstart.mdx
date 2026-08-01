@@ -1,0 +1,94 @@
+---
+title: Quickstart
+description: Drive a thread end to end with no Slack app involved.
+---
+
+The `/api` surface drives the exact same Durable Object path a Slack mention does. Only the
+trigger and the output sink differ. With `MemoryTransport`, everything the agent
+"says" is recorded in the Durable Object and readable back.
+
+## The core loop
+
+```bash
+npm install
+npm run dev-vars          # writes .dev.vars
+npm run dev               # local worker on :8787
+
+# one command: trigger, follow, print the agent's replies
+npm run drive -- --thread demo "create hello.txt with the word banana and tell me what you did"
+npm run drive -- --thread demo "what was in that file?"   # same thread => same sandbox
+npm run drive -- --thread demo --stop                     # archive the sandbox
+```
+
+None of that needs a Slack app.
+
+## What `drive` is doing
+
+`scripts/drive.ts` is a thin loop over the [control API](/docs/api):
+
+1. reads how many messages the thread already has, so it only prints new ones;
+2. `POST /api/threads/{id}/prompt` with your text;
+3. polls `GET /api/threads/{id}` every 2s and prints each phase transition to stderr
+   (`starting_box` → `waiting_box` → `bootstrapping` → `running` → `idle`);
+4. polls `GET /api/threads/{id}/messages` and prints anything new, **and anything edited**,
+   because the status message is updated in place rather than reposted;
+5. stops when the phase is `idle` with no active prompt, when `lastError` is set, or after
+   15 minutes.
+
+Flags:
+
+| Flag | |
+|---|---|
+| `--thread <id>` | Thread id. Defaults to a random `cli-xxxxxx`. Same id = same sandbox. |
+| `--url <origin>` | Worker origin. Defaults to `$WORKER_URL` then `http://localhost:8787`. |
+| `--stop` | `DELETE` the thread: archive the sandbox and clear session state. |
+
+## Local runs and the MCP callback
+
+<Callout type="warn">
+For the agent to actually reach `/mcp`, `PUBLIC_URL` has to be publicly reachable. Against
+a local worker the box cannot call back, so the run exercises the
+[watchdog fallback](/docs/lifecycle#the-watchdog) instead: the reply is recovered from the
+box event log and posted for the agent.
+</Callout>
+
+Full end-to-end runs go against the deployed Worker:
+
+```bash
+npm run drive -- --url https://<your-worker>.workers.dev --thread demo "hello"
+```
+
+## Poking at it by hand
+
+Every route wants `Authorization: Bearer $API_TOKEN`.
+
+```bash
+API_TOKEN=$(grep '^API_TOKEN=' .dev.vars | cut -d= -f2)
+
+# trigger
+curl -sX POST localhost:8787/api/threads/t1/prompt \
+  -H "Authorization: Bearer $API_TOKEN" -H 'content-type: application/json' \
+  -d '{"text":"run the tests","metadata":{"ticket":"ENG-42"}}'
+
+# state
+curl -s localhost:8787/api/threads/t1 -H "Authorization: Bearer $API_TOKEN"
+
+# what the agent said
+curl -s localhost:8787/api/threads/t1/messages -H "Authorization: Bearer $API_TOKEN"
+
+# archive the sandbox
+curl -sX DELETE localhost:8787/api/threads/t1 -H "Authorization: Bearer $API_TOKEN"
+```
+
+Anything in `metadata` is passed through into the prompt's context block for that message.
+See [Prompt construction](/docs/prompts).
+
+## Health check
+
+`/health` needs no auth and reports whether Slack is configured, which template is set, and
+the provider:
+
+```bash
+curl -s localhost:8787/health
+# {"ok":true,"slack":false,"template":null,"provider":"claude-code"}
+```

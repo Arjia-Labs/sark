@@ -1,0 +1,78 @@
+---
+title: Testing
+description: Two vitest projects, one command, and why the Slack-free path is the real path.
+---
+
+```bash
+npm run typecheck
+npm test
+npm run smoke      # verify Box API access and template
+```
+
+## Two projects, one `vitest run`
+
+`vitest.workspace.ts` defines two projects, so only the tests that need a real runtime pay
+for one:
+
+| Project | Runs | Where |
+|---|---|---|
+| `node` | `test/*.test.ts` | plain node |
+| `workers` | `test/do/**/*.test.ts` | real workerd, real Durable Object storage, real alarms |
+
+The `node` include is deliberately **non-recursive**: `test/do/**` must not be picked up
+there.
+
+The workers project loads `wrangler.jsonc` for its bindings and injects the three secrets
+(`BOX_API_KEY`, `MCP_TOKEN_SECRET`, `API_TOKEN`) as test values, since real deployments
+carry them as `wrangler secret`s rather than in the config file.
+
+### Isolated storage is off, on purpose
+
+These sessions schedule **real alarms**. An alarm firing a moment after the test that armed
+it would touch storage the per-test teardown had already unwound. Isolation comes from every
+test addressing a fresh, uniquely-named thread instead.
+
+If you add a Durable Object test, give it a unique thread id. Don't re-enable
+`isolatedStorage`.
+
+## What the Slack-free path covers
+
+`MemoryTransport` implements the same `Transport` interface `SlackTransport` does, and the
+Durable Object only ever talks to that interface. So an `/api`-driven run exercises the
+*same* enqueue, box lifecycle, MCP bootstrap, prompt construction, watchdog, and idle-stop
+code that a Slack mention does. Only the trigger and the output sink differ.
+
+That makes the whole pipeline scriptable with no Slack workspace at all, and it makes
+`npm run drive` a real integration test.
+
+## What's covered
+
+| | |
+|---|---|
+| `test/auth.test.ts` | token minting, signature verification, expiry, clock skew, constant-time compare |
+| `test/mcp.test.ts` | JSON-RPC handling, batches, notifications, limits, method dispatch |
+| `test/prompt.test.ts` | prompt shape, batched messages, delimiter neutralization, mention stripping |
+| `test/slack.test.ts` | event interpretation: what's ignored, what runs, thread id derivation |
+| `test/controls.test.ts` | emoji → action mapping, skin-tone stripping, effort levels |
+| `test/do/session.test.ts` | the `ThreadSession` state machine against real DO storage and alarms |
+
+## What the tests can't cover
+
+The MCP callback needs the box to reach a publicly-routable `PUBLIC_URL`. That path only
+proves itself against a deployed Worker:
+
+```bash
+npm run drive -- --url https://<your-worker>.workers.dev --thread smoke "say hi"
+```
+
+Locally, the box can't call back, so a local run exercises the
+[watchdog fallback](/docs/lifecycle#the-watchdog) instead, which is itself worth
+exercising.
+
+## Before sending a PR
+
+```bash
+npm run typecheck
+npm test
+npm run smoke
+```

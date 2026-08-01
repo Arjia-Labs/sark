@@ -1,0 +1,82 @@
+---
+title: Deploy
+description: The three things a real deployment needs, and what breaks without each.
+---
+
+## 1. Template box (optional, but recommended)
+
+Without `TEMPLATE_BOX_ID` every thread gets a **fresh** box: empty, no repos, nothing
+installed. With one, threads fork a snapshot that already has your stack, your repos, and
+your MCP settings, so a thread is useful the second it starts.
+
+```bash
+box new                      # install your stack, clone repos
+box stop <id>                # the snapshot IS the template
+# set TEMPLATE_BOX_ID=<id> in wrangler.jsonc
+```
+
+Keep the template **stopped**. To publish a new version: resume → update → stop.
+
+<Callout>
+`fork()` does not accept a TTL, so `sark` sets `ttlSeconds` (and a readable box name,
+`slack <threadId>`) with a follow-up `PATCH` right after the fork. A failure there is
+logged and non-fatal.
+</Callout>
+
+## 2. Set the secrets
+
+```bash
+npx wrangler secret put BOX_API_KEY        # box_... from the Box dashboard
+npx wrangler secret put MCP_TOKEN_SECRET   # any long random string
+npx wrangler secret put API_TOKEN          # guards /api
+npx wrangler deploy
+```
+
+| Secret | If unset |
+|---|---|
+| `BOX_API_KEY` | Nothing works; every box call fails. |
+| `MCP_TOKEN_SECRET` | Tokens cannot be minted or verified; the agent can never reply. |
+| `API_TOKEN` | Every `/api` route returns **503**. This is deliberate: it fails closed rather than open. |
+
+Rotating `MCP_TOKEN_SECRET` invalidates every token currently sitting inside a live
+sandbox. Those threads recover on their next turn, when `ensureMcp` re-registers.
+
+## 3. Set `PUBLIC_URL`
+
+```jsonc title="wrangler.jsonc"
+"PUBLIC_URL": "https://<your-worker>.workers.dev"
+```
+
+This is the one var that *must* be right. It is baked into each box's environment as
+`SLACK_MCP_URL` (`${PUBLIC_URL}/mcp`) at fork time, and it is how the agent finds its way
+back. If it points somewhere unreachable, every run falls through to the
+[watchdog](/docs/lifecycle#the-watchdog) instead of the agent speaking for itself.
+
+Because box env is fixed at fork time, changing `PUBLIC_URL` does not update boxes that
+already exist. Threads pick it up when their box is next recreated.
+
+See [Configuration](/docs/configuration) for the rest of the vars.
+
+## 4. Verify
+
+```bash
+curl -s https://<your-worker>.workers.dev/health
+# {"ok":true,"slack":true,"template":"box_...","provider":"claude-code"}
+
+npm run drive -- --url https://<your-worker>.workers.dev --thread smoke "say hi"
+```
+
+A real end-to-end run against the deployed origin is the only way to prove the MCP callback
+path works, because that path requires a publicly reachable `PUBLIC_URL`.
+
+## Deploying and in-flight threads
+
+The state machine is driven by **persisted Durable Object alarms**, not by inline work in a
+request. A deploy that resets a Durable Object mid-step therefore doesn't strand its queue:
+the alarm is still in storage, and `ensureLiveness()` re-arms one if a thread has
+outstanding work with no alarm scheduled. Reading `GET /api/threads/{id}` also re-arms a
+stranded thread, so a poller heals it for free.
+
+## Slack
+
+Slack is optional and comes last. See [Connect Slack](/docs/getting-started/slack).

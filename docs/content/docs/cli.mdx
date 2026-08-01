@@ -1,0 +1,91 @@
+---
+title: CLI scripts
+description: The three scripts you actually run, and what each one proves.
+---
+
+| | |
+|---|---|
+| `npm run dev` | `wrangler dev` on :8787 |
+| `npm run deploy` | `wrangler deploy` |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm test` | both vitest projects |
+| `npm run dev-vars` | generate `.dev.vars` |
+| `npm run smoke` | verify Box credentials and template |
+| `npm run drive` | drive a thread end to end |
+
+All three scripts read `.dev.vars` themselves (via `scripts/env.ts`), and an environment
+variable always wins over the file.
+
+## `drive`: talk to a thread
+
+```bash
+npm run drive -- --thread demo "create hello.txt with the word banana"
+npm run drive -- --thread demo "what was in that file?"   # same thread => same sandbox
+npm run drive -- --thread demo --stop                     # archive the sandbox
+npm run drive -- --url https://<your-worker>.workers.dev --thread demo "hello"
+```
+
+| Flag | |
+|---|---|
+| `--thread <id>` | Thread id. Defaults to a random `cli-xxxxxx`. Same id = same sandbox. |
+| `--url <origin>` | Worker origin. Defaults to `$WORKER_URL`, then `http://localhost:8787`. |
+| `--stop` | `DELETE` the thread: archive the sandbox and clear session state. |
+
+Everything after the flags is the message text.
+
+It sends the prompt, then polls state and messages every 2s, printing:
+
+- **phase transitions** to stderr, as `[starting_box box_7f21a9]`;
+- **new messages** to stdout;
+- **edited messages** marked `(edited)`, because the status message is updated in place and
+  the watchdog fallback lands there rather than as a new message.
+
+It exits when the phase is `idle` with no active prompt, non-zero if `lastError` is set or
+after a 15-minute timeout.
+
+`user` is sent as `cli` and `userName` as `$USER`, so the agent sees who ran it.
+
+## `smoke`: prove Box access
+
+```bash
+npm run smoke
+TEMPLATE_BOX_ID=box_… npm run smoke
+KEEP=1 npm run smoke              # leave the box running
+```
+
+Talks to the Box API **directly**: no Worker, no Slack, no MCP. If this fails, nothing
+downstream will work, and the failure is not a Worker problem.
+
+It forks your template (or creates a fresh box), waits up to 180s for it to become usable,
+runs `whoami && pwd && which claude codex`, sends a real prompt, waits up to 300s for it to
+finish, prints the last few response events, reads back the file the agent was asked to
+write, then stops the box unless `KEEP=1`.
+
+Honours `BOX_API_KEY`, `BOX_BASE_URL`, `TEMPLATE_BOX_ID`, and `BOX_PROVIDER` from the
+environment or `.dev.vars`.
+
+## `dev-vars`: generate local secrets
+
+```bash
+npm run dev-vars
+```
+
+Writes `.dev.vars` with `BOX_API_KEY` copied out of the `box` CLI's own config and freshly
+generated `MCP_TOKEN_SECRET` / `API_TOKEN`. **No secret is ever typed, pasted, or echoed.**
+
+It refuses to overwrite an existing `.dev.vars`, so delete it first to regenerate. Needs `jq`
+and `openssl`. Details in [Install](/docs/getting-started/install#generate-dev-vars).
+
+## Curl, if you'd rather
+
+Everything `drive` does is six routes. See the [Control API](/docs/api).
+
+```bash
+API_TOKEN=$(grep '^API_TOKEN=' .dev.vars | cut -d= -f2)
+
+curl -sX POST localhost:8787/api/threads/t1/prompt \
+  -H "Authorization: Bearer $API_TOKEN" -H 'content-type: application/json' \
+  -d '{"text":"run the tests"}'
+
+curl -s localhost:8787/api/threads/t1 -H "Authorization: Bearer $API_TOKEN"
+```

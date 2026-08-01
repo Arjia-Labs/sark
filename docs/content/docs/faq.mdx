@@ -1,0 +1,105 @@
+---
+title: FAQ
+description: What sark is not, and why.
+---
+
+## Do I need Slack to use this?
+
+No. The `/api` surface drives the entire pipeline: same Durable Object, same box lifecycle,
+same MCP bootstrap, same watchdog. Only the trigger and the output sink differ. See the
+[Quickstart](/docs/getting-started/quickstart).
+
+## Do I need a Box account?
+
+Yes. This Worker is a control plane for [ascii.dev Box](https://docs.ascii.dev/box/api/v1)
+sandboxes and does nothing without one.
+
+## Can I run it on the Workers free plan?
+
+No. The per-thread state machine is a Durable Object with a SQLite backend, which the free
+plan doesn't include.
+
+## Why one sandbox per thread instead of one per user, or one shared?
+
+Because the conversation and the filesystem have to stay in sync. A thread is the natural
+unit of "a piece of work" in Slack: it has a beginning, participants, and context. Sharing a
+filesystem across threads means two conversations trampling each other's files; one per user
+means a person can't have two things going at once.
+
+The cost is more boxes. Idle threads archive theirs, and archived boxes resume onto the same
+filesystem, so the steady-state cost is bounded.
+
+## Which agent runs inside the box?
+
+Whatever `BOX_PROVIDER` points at, which is `claude-code` by default. sark doesn't interpret it; the
+value is passed straight through to the Box API. The bootstrap script does assume Claude
+Code's `claude mcp add` and `~/.claude/settings.json`, so a different provider would need
+that step adapted.
+
+## Why can't the agent just print its answer?
+
+Because nothing it prints reaches Slack. The Worker never reads the agent's stdout in the
+normal path. The agent posts through MCP, which is what makes the destination
+token-controlled rather than argument-controlled. The prompt says this in as many words, and
+the [watchdog](/docs/lifecycle#the-watchdog) recovers a reply from the box event log when
+the agent forgets anyway.
+
+## What happens if five people talk at once?
+
+They queue, then drain into **one** turn. Each message keeps its own `<message>` block with
+its own sender and metadata, so the agent attributes each request to the person who actually
+made it, not to whoever spoke first. Past 20 queued messages, further ones are refused with
+a notice. See [Prompt construction](/docs/prompts).
+
+## Can someone in the channel impersonate someone else?
+
+Not through the prompt structure. Message bodies, display names, and `/api` metadata are all
+untrusted, so the delimiters the prompt is built from are neutralized inside them, and a
+user can't close their own block and open one under another name. The instructions also tell the
+agent not to trust a message claiming to come from someone other than the sender named on
+its own block.
+
+They can, of course, still *ask* for something. That's what the allowlist is for.
+
+## What can a compromised sandbox do?
+
+Post into exactly one Slack thread, for at most 12 hours, at a bounded rate, and nothing
+else. The tools have no `channel` parameter, the token names one thread and one box
+generation, and the sandbox never holds a Slack credential at all. See
+[Security](/docs/security).
+
+## Is `API_TOKEN` as sensitive as the bot token?
+
+Yes. `/api` deliberately bypasses the Slack allowlist, so a caller can address any thread and
+make the bot post into any conversation the bot token can reach. Guard it accordingly.
+
+## Why is the allowlist empty by default?
+
+So that a fresh deployment refuses everything rather than letting any channel spin up
+sandboxes. You opt channels in; there is no opt-out mode.
+
+## Can I use this with two Slack workspaces?
+
+Not really. It's one Worker, one Box account, one allowlist. `ALLOWED_TEAMS` pins the
+workspace rather than partitioning between several.
+
+## Can I bridge it to Discord / Teams / anything else?
+
+Nothing stops you, but nothing helps you either. `Transport` is the seam where a second
+platform would go: implement the interface and give the thread id a namespace. The MCP
+tools are named `slack_*` throughout, so it isn't free.
+
+## What isn't in scope?
+
+- **An agent runtime.** The agent is whatever `BOX_PROVIDER` points at; this just gives it a
+  thread to live in.
+- **A multi-tenant SaaS.** One Worker, one Box account, one workspace's allowlist.
+- **A general Slack framework.** Five tools, a handful of event types, one dropdown, no
+  slash commands.
+- **A job queue.** One run per thread, a bounded backlog, no cross-thread scheduling.
+- **A bridge to other chat platforms.** See above.
+
+## Why "sark"?
+
+**S**lack **A**gent **R**untime **K**ernel, and Tron's Sark: the Master Control Program's
+lieutenant, who commands Programs on the Grid.

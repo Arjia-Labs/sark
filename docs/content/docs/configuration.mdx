@@ -1,0 +1,116 @@
+---
+title: Configuration
+description: Every var and secret, with what happens if you leave it unset.
+---
+
+Secrets go in via `wrangler secret put` (or `.dev.vars` locally); everything else lives in
+`vars` in `wrangler.jsonc`.
+
+## Secrets
+
+| | | If unset |
+|---|---|---|
+| `BOX_API_KEY` | `box_...` from the Box dashboard. | Nothing works; every box call fails. |
+| `MCP_TOKEN_SECRET` | Any long random string. Signs thread-scoped MCP tokens. | Tokens can't be minted or verified; the agent can never reply. |
+| `API_TOKEN` | Guards `/api`. | Every `/api` route returns **503**, failing closed. |
+| `SLACK_BOT_TOKEN` | `xoxb-...`. Optional. | The bot can't post; threads fall back to `MemoryTransport`. |
+| `SLACK_SIGNING_SECRET` | Optional. | `/slack/events` and `/slack/interactive` return **503**. |
+
+`npm run dev-vars` generates the first three for local development; see
+[Install](/docs/getting-started/install#generate-dev-vars).
+
+## Vars
+
+```jsonc title="wrangler.jsonc"
+"vars": {
+  "TEMPLATE_BOX_ID": "",
+  "BOX_BASE_URL": "https://ascii.dev/api/box/v1",
+  "PUBLIC_URL": "https://<your-worker>.workers.dev",
+  "BOX_PROVIDER": "claude-code",
+  "BOX_MODEL": "",
+  "BOX_TTL_SECONDS": "3600",
+  "IDLE_STOP_SECONDS": "900",
+  "PROMPT_HARD_CAP_SECONDS": "1200",
+  "ALLOWED_CHANNELS": "",
+  "ALLOWED_USERS": "",
+  "ALLOWED_TEAMS": ""
+}
+```
+
+### `PUBLIC_URL`
+
+The public origin of this Worker. Baked into each box's env as `SLACK_MCP_URL`
+(`${PUBLIC_URL}/mcp`) **at fork time**, and it's how the agent finds its way back.
+
+If it's wrong or unreachable, every run falls through to the
+[watchdog](/docs/lifecycle#the-watchdog) instead of the agent speaking for itself. Because
+box env is fixed at fork time, changing this does not update boxes that already exist.
+
+### `TEMPLATE_BOX_ID`
+
+Box to fork per thread. Empty means each thread gets a **fresh** box: no repos, nothing
+installed. See [Deploy](/docs/getting-started/deploy#1-template-box-optional-but-recommended).
+
+### `BOX_BASE_URL`
+
+Box API v1 base. Only change it to point at a different Box deployment.
+
+### `BOX_PROVIDER` / `BOX_MODEL`
+
+Which agent runs inside the box (`claude-code` by default) and, optionally, which model.
+An empty `BOX_MODEL` means the box's own default. sark does not interpret either value;
+they're passed straight through to `POST /boxes/{id}/prompt`.
+
+### Timers
+
+All three parse as positive numbers, falling back to their default if unset, zero, negative,
+or unparseable.
+
+| | Default | |
+|---|---|---|
+| `BOX_TTL_SECONDS` | 3600 | TTL set on the box itself. Applied on create, or with a follow-up `PATCH` after a fork. |
+| `IDLE_STOP_SECONDS` | 900 | Quiet period before a thread archives its box. Also the wake-up interval a finished thread schedules. |
+| `PROMPT_HARD_CAP_SECONDS` | 1200 | Wall-clock cap on a single run. Past it, the watchdog gives up and says so. |
+
+### Allowlists
+
+Comma-separated Slack IDs; whitespace is trimmed and empty entries dropped.
+
+| | |
+|---|---|
+| `ALLOWED_CHANNELS` | Channel IDs (`C…`) that may use the bot. |
+| `ALLOWED_USERS` | User IDs (`U…`) that may use the bot anywhere. |
+| `ALLOWED_TEAMS` | Workspace IDs (`T…`). When non-empty, the event's team must match. |
+
+**Both channel and user lists empty means every mention is refused.** See
+[the allowlist](/docs/getting-started/slack#the-allowlist).
+
+## Compile-time limits
+
+These are constants in the source, not configuration. They're here so you know they exist.
+
+| | Value | Where |
+|---|---|---|
+| Prompt characters | 16,000 | `MAX_PROMPT_CHARS` |
+| Queued messages per thread | 20 | `MAX_QUEUED_PROMPTS` |
+| MCP batch size | 32 | `MAX_BATCH_SIZE` |
+| MCP request body | 1 MB | `src/mcp/server.ts` |
+| Recorded messages kept | 500 | `MAX_RECORDED` |
+| Token lifetime | 12 hours | `THREAD_TOKEN_MAX_AGE_SECONDS` |
+| Token refresh | at half-life (6h) | `TOKEN_REFRESH_MS` |
+| Box readiness timeout | 180s | `BOX_READY_TIMEOUT_MS` |
+| Box poll interval | 2s | `BOX_POLL_MS` |
+| Watchdog interval | 5s | `WATCHDOG_MS` |
+| Slack `event_id`s remembered | 100 | `alreadySeen` |
+
+## Durable Object binding
+
+```jsonc title="wrangler.jsonc"
+"durable_objects": {
+  "bindings": [{ "name": "THREAD_SESSIONS", "class_name": "ThreadSession" }]
+},
+"migrations": [{ "tag": "v1", "new_sqlite_classes": ["ThreadSession"] }]
+```
+
+`new_sqlite_classes` means the SQLite-backed Durable Object storage, which is **not
+available on the Workers free plan**.

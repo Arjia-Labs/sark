@@ -1,0 +1,92 @@
+---
+title: Install
+description: Requirements, dependencies, and generating .dev.vars without ever typing a secret.
+---
+
+## Requirements
+
+| | |
+|---|---|
+| **ascii.dev Box account** | This Worker is a control plane for [Box](https://docs.ascii.dev/box/api/v1) sandboxes. Without a `box_...` API key it does nothing. |
+| **Cloudflare Workers + Durable Objects** | The per-thread state machine is a DO with a SQLite backend, which the free plan doesn't include. |
+| **Node 22+** | For `wrangler`, `tsx`, and the scripts. |
+| **`box` CLI** | Only for `npm run dev-vars`, which reads your key out of its config. |
+| **`jq` and `openssl`** | Used by `scripts/dev-vars.sh`. |
+| **A Slack app** | Optional. The `/api` surface drives everything without one. |
+
+## Clone and install
+
+```bash
+git clone https://github.com/arjia-Labs/sark.git
+cd sark
+npm install
+```
+
+## Generate `.dev.vars`
+
+```bash
+npm run dev-vars
+```
+
+`scripts/dev-vars.sh` writes a `.dev.vars` file for local `wrangler dev`. It:
+
+- copies `BOX_API_KEY` straight out of the `box` CLI's own config
+  (`~/Library/Application Support/ascii/box/config.json`, or
+  `~/.config/ascii/box/config.json`), so **no secret is ever typed, pasted, or echoed**;
+- generates a fresh `MCP_TOKEN_SECRET` and `API_TOKEN` with `openssl rand -hex 32`;
+- writes the file with `umask 077`;
+- **refuses to overwrite** an existing `.dev.vars`, so delete it first to regenerate.
+
+`.dev.vars` is gitignored. The resulting file looks like:
+
+```bash title=".dev.vars"
+BOX_API_KEY=box_...
+MCP_TOKEN_SECRET=<64 hex chars>
+API_TOKEN=<64 hex chars>
+
+# Slack is optional. The /api surface works without it.
+# SLACK_BOT_TOKEN=xoxb-...
+# SLACK_SIGNING_SECRET=...
+```
+
+To read the API token back for scripts:
+
+```bash
+grep '^API_TOKEN=' .dev.vars | cut -d= -f2
+```
+
+The `drive` script does this for you; it loads `.dev.vars` itself.
+
+If you have no `box` CLI login, run `box login` first, or write `.dev.vars` by hand with
+the four keys above.
+
+## Verify your Box credentials
+
+Before touching the Worker at all, check that the Box API answers and your template (if
+you configured one) exists:
+
+```bash
+npm run smoke
+```
+
+This runs `scripts/box-smoke.ts`, which talks to the Box API directly. If it fails,
+nothing downstream will work, and the failure is not a Worker problem.
+
+## Check the toolchain
+
+```bash
+npm run typecheck
+npm test
+```
+
+`npm test` runs two vitest projects in one command: fast node unit tests, and the
+`ThreadSession` Durable Object tests inside a real workerd runtime. See
+[Testing](/docs/testing).
+
+## Run it
+
+```bash
+npm run dev     # wrangler dev on :8787
+```
+
+Then [drive a thread](/docs/getting-started/quickstart).

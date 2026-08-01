@@ -1,0 +1,121 @@
+---
+title: Operations
+description: What to look at when a thread misbehaves, and what each failure actually means.
+---
+
+## First stop: thread state
+
+```bash
+curl -s https://<your-worker>.workers.dev/api/threads/{id} \
+  -H "Authorization: Bearer $API_TOKEN"
+```
+
+That one call answers most questions: which box, what state it's in, which phase the
+machine is in, whether MCP is registered for the *current* box generation, how many messages
+are queued, and the last error.
+
+For a live Slack thread, `{id}` is `{team}:{channel}:{thread_ts}`. Take those from the
+message's permalink.
+
+Reading state also re-arms a stranded thread, so this is safe to poll.
+
+## Structured logs
+
+The Worker emits JSON lines for the events worth correlating:
+
+| `at` | |
+|---|---|
+| `slack.event` | every inbound event: `event_id`, type, retry number and reason |
+| `enqueue.accept` / `enqueue.duplicate` | whether a message became work |
+| `control` | which control action ran, on which thread, triggered by whom |
+| `invokeTool.staleBox` | a token from a previous box generation tried to speak |
+
+`npx wrangler tail` to follow them.
+
+## Symptoms
+
+### The thread went quiet
+
+It shouldn't; that's what the [watchdog](/docs/lifecycle#the-watchdog) is for. If it
+happens anyway, check `phase`:
+
+- `running` with a growing `elapsedSeconds` → the agent is still working. It gets edited to
+  `🤖 Still working…` after 90s and gives up at `PROMPT_HARD_CAP_SECONDS`.
+- `idle` with no messages → look at `lastError`, then the Worker logs.
+
+### The agent works but never replies
+
+`mcpRegistered: false`, or a fallback message that reads like a recovered answer rather than
+something written for the thread. The registration is missing inside the box.
+
+This self-heals: a run that finishes with nothing said clears the registration flag, so the
+next turn re-bootstraps. If it happens *every* turn, `PUBLIC_URL` is almost certainly wrong
+or unreachable, so the box has no route back. Boxes bake it in at fork time, so an existing
+box keeps the old value until it's recreated.
+
+### "This token belongs to a sandbox that is no longer attached to this thread"
+
+A box from a previous generation is still trying to talk. Harmless: the thread moved on,
+either archived and resumed, or forked. Look for `invokeTool.staleBox` in the logs if it repeats.
+
+### Every mention is refused
+
+`🚫 No channels or users are allowlisted yet.` The allowlist is empty and
+[fails closed](/docs/getting-started/slack#the-allowlist). Set `ALLOWED_CHANNELS` or
+`ALLOWED_USERS` and redeploy.
+
+`🚫 This bot is not enabled in this channel.` means the channel isn't listed and the user
+isn't either. `🚫 This workspace is not enabled for this bot.` means `ALLOWED_TEAMS` doesn't
+include this workspace.
+
+### Duplicate runs from one mention
+
+Shouldn't happen: retries are dropped at the edge on `x-slack-retry-num`, with `event_id`
+dedup in the Durable Object as the backstop. If you see it, check the `slack.event` logs for
+two *different* `event_id`s, which is Slack sending two events rather than a dedup failure.
+
+### "The sandbox was still 'provisioning' after 180s"
+
+The box never became usable. Check the Box dashboard; `npm run smoke` will tell you whether
+this is a credentials/template problem rather than a Worker one.
+
+### 503 from `/api`
+
+`API_TOKEN` isn't set on the deployment. Fail-closed, by design.
+
+### 429 from `/api`
+
+The thread's queue is full (20). The agent is already behind, so this is backpressure. Wait,
+or `POST /interrupt`.
+
+### 413 from `/api`
+
+Text longer than 16,000 characters. Slack input is truncated instead of refused.
+
+## Getting unstuck
+
+| | |
+|---|---|
+| Stop the current run | `POST /api/threads/{id}/interrupt`, or 🛑 in the thread |
+| Archive the sandbox | 💤 in the thread |
+| Reset the thread entirely | `DELETE /api/threads/{id}` stops the box and wipes DO storage. The next message starts fresh. |
+| Re-run the last prompt | ♻️ in the thread |
+| Watch what the sandbox is doing | 🖥️ in the thread |
+
+## Cost and cleanup
+
+Three timers bound what a thread can leave running:
+
+- `IDLE_STOP_SECONDS` (900): quiet threads archive their box automatically.
+- `BOX_TTL_SECONDS` (3600): the TTL on the box itself.
+- `PROMPT_HARD_CAP_SECONDS` (1200): no single run outlives this.
+
+Archiving snapshots, so archived boxes are cheap and resume onto the same filesystem.
+Forked threads each own a box, so 🍴 doubles the footprint of that conversation until both
+archive.
+
+## Deploying while threads are live
+
+Safe. The state machine runs on persisted Durable Object alarms, not inline request work, so
+a Durable Object reset mid-step doesn't strand a queue: the alarm survives, and
+`ensureLiveness()` re-arms anything that lost one.

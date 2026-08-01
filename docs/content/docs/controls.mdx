@@ -1,0 +1,103 @@
+---
+title: Emoji controls
+description: Six reactions that drive a thread, plus the one dropdown a reaction can't express.
+---
+
+Reactions are the control surface. They arrive as ordinary Events API events, so they add
+no new trust boundary: same signature check, same allowlist, same dedup as a mention.
+
+The bot seeds all six on its own status message, so they're discoverable without anyone
+having to read this page.
+
+## The six
+
+| | Reaction | Action |
+|---|---|---|
+| 🛑 | `octagonal_sign` | **Interrupt** the running agent. Same as typing `stop`. |
+| ♻️ | `recycle` | **Re-run** the last prompt, at the same effort as before. |
+| 🧠 | `brain` | **Escalate.** Offers a reasoning-effort picker to re-run at. |
+| 🍴 | `fork_and_knife` | **Fork** this conversation into a new thread with a copy of the filesystem. |
+| 🖥️ | `desktop_computer` | **Watch** the sandbox's desktop in a browser. |
+| 💤 | `zzz` | **Archive** the sandbox now, rather than waiting out the idle timer. |
+
+A reaction on **any** message in the thread works, not just the status message. Anything
+outside the six above is ignored, which is what keeps the `reactions:read` scope from being
+noisy. Skin-tone variants (`+::skin-tone-3`) are stripped before matching.
+
+Reactions by the bot itself are ignored; otherwise seeding the affordances would trigger
+every one of them.
+
+<Callout>
+**Controls fail closed.** A reaction on a thread with no session does nothing and creates
+nothing. A reaction from outside the allowlist is dropped *silently*: replying would turn
+any emoji in a public channel into a way to make the bot talk.
+</Callout>
+
+## Finding the thread
+
+A `reaction_added` payload carries the `ts` of the message that was reacted to, but **not**
+its `thread_ts`. So the thread has to be recovered before the Durable Object can even be
+addressed; `resolveThreadTs()` in `src/slack/api.ts` does that lookup. A reaction on a reply
+resolves to the thread that reply belongs to.
+
+## ♻️ Re-run
+
+Re-running is **parked**, not sent directly: a `retry` record goes into storage and the
+state machine picks it up on the next alarm. That's deliberate: the box may be archived, and
+waking it is `ensureBox`'s job, not the control handler's.
+
+- Nothing run on this thread yet → *"There is nothing to re-run on this thread yet."*
+- Something already running → *"Something is already running here. Stop it with 🛑 first."*
+
+## 🧠 Escalate
+
+A reaction can only ever mean one fixed thing, so 🧠 doesn't pick a level. It posts a
+Block Kit dropdown offering `low`, `medium`, `high`, `max`, noting the current effort if
+there is one. Selecting a level comes back through `/slack/interactive` and parks the same
+kind of retry.
+
+Which levels a given model accepts varies, so an unsupported value surfaces as a Box API
+error rather than being rejected up front.
+
+This is the **only** interactive component in the app. Its handler verifies the Slack
+signature and runs the same `isAllowed` gate as a mention before acting; anything that
+isn't a `block_actions` payload for the known action id is dropped.
+
+## 🍴 Fork
+
+Branch a conversation without disturbing it. The bot:
+
+1. posts a **new top-level message** in the same channel, announcing who forked it;
+2. forks this thread's box, baking the *new* thread's id into the fork's env. The new
+   thread has to be opened first, because box env is fixed at fork time;
+3. sets the TTL and a readable name on the fork;
+4. seeds a session on the new thread with `adoptFork`, recording what it was forked from;
+5. links the new thread from the old one.
+
+The forked box starts from the current filesystem, so the new thread carries on from
+exactly where the old one was. Nothing runs in it until someone mentions the bot there.
+
+`adoptFork` refuses to clobber an existing session: the new thread's `ts` is fresh, so a
+session already being there would mean something went badly wrong, and overwriting it would
+strand a running box.
+
+Forking needs Slack, since there's no channel to fork into otherwise.
+
+## 🖥️ Desktop
+
+Asks the Box API for a desktop URL with public access and posts it, with a warning that
+anyone holding the link can view the sandbox.
+
+## 💤 Archive
+
+Archives the sandbox immediately instead of waiting for `IDLE_STOP_SECONDS`. If something
+is running it's interrupted first, quietly, since the archive notice is the answer. Archiving
+snapshots the filesystem, so the next message in the thread wakes it back up on the same
+files.
+
+Already archived → says so and does nothing.
+
+## Failure and dedup
+
+Every control is deduped on `event_id` like any other Slack event. A control that throws
+posts a user-safe `⚠️` line into the thread and logs the rest.

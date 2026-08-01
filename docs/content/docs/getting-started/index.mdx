@@ -1,0 +1,48 @@
+---
+title: Getting Started
+description: What you need, how to run it locally, and how to get a thread talking end to end.
+---
+
+Getting `sark` running is four steps, and only the last one involves Slack.
+
+<Cards>
+  <Card title="Install" href="/docs/getting-started/install" description="Requirements, dependencies, and generating .dev.vars." />
+  <Card title="Quickstart" href="/docs/getting-started/quickstart" description="Drive a thread end to end with no Slack app." />
+  <Card title="Deploy" href="/docs/getting-started/deploy" description="Template box, secrets, PUBLIC_URL." />
+  <Card title="Connect Slack" href="/docs/getting-started/slack" description="Manifest, bot token, and the fail-closed allowlist." />
+</Cards>
+
+## The short version
+
+```bash
+npm install
+npm run dev-vars          # writes .dev.vars (BOX_API_KEY comes from your `box` CLI login)
+npm run dev               # local worker on :8787
+
+npm run drive -- --thread demo "create hello.txt with the word banana and tell me what you did"
+```
+
+## What you need before any of that
+
+- An **[ascii.dev Box](https://docs.ascii.dev/box/api/v1) account**. This Worker is a
+  control plane for Box sandboxes and does nothing without one. You need a `box_...` API key.
+- **Cloudflare Workers with Durable Objects.** The per-thread state machine is a Durable
+  Object with a SQLite backend, which is not available on the free plan.
+- **Node 22+** and the `box` CLI.
+- A Slack app is **optional**. The `/api` surface exercises the whole pipeline without one.
+
+Throughout these docs, `https://<your-worker>.workers.dev` stands in for your own deployed
+origin. Replace it, and set the same value as `PUBLIC_URL` in `wrangler.jsonc`.
+
+## One caveat about local development
+
+The box has to be able to reach your Worker's `/mcp` endpoint to say anything. A local
+`wrangler dev` on `localhost:8787` is not reachable from a cloud sandbox, so a local run
+exercises the [watchdog fallback path](/docs/lifecycle#the-watchdog) instead: the reply is
+recovered from the box event log rather than posted by the agent.
+
+Full end-to-end runs go against the deployed Worker:
+
+```bash
+npm run drive -- --url https://<your-worker>.workers.dev --thread demo "hello"
+```

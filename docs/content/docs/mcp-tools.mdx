@@ -1,0 +1,129 @@
+---
+title: MCP tools
+description: The five tools the agent gets, and why none of them takes a channel.
+---
+
+The agent inside the box reaches Slack through an MCP server hosted by this Worker at
+`/mcp`. It gets exactly five tools, and **none of them takes a `channel` or `thread`
+parameter**. The destination is fixed by the bearer token the box was given, so a
+compromised box cannot post anywhere except the thread that spawned it.
+
+## The tools
+
+### `slack_post_message`
+
+Post into the thread that asked for this work. **The only way to talk to the user**, since
+stdout is not shown to them. Returns the message `ts`.
+
+| Param | | |
+|---|---|---|
+| `text` | **required** | Slack mrkdwn. |
+| `broadcast` | | Also show the reply in the main channel, not just the thread. |
+
+### `slack_update_message`
+
+Edit a message posted earlier. This is the intended way to turn a progress note into the
+final answer instead of posting five messages.
+
+| Param | | |
+|---|---|---|
+| `ts` | **required** | The `ts` returned by `slack_post_message`. |
+| `text` | **required** | Replacement text. |
+
+### `slack_add_reaction`
+
+React to the message that triggered this run.
+
+| Param | | |
+|---|---|---|
+| `name` | **required** | Emoji name without colons, e.g. `white_check_mark`. |
+
+Colons are stripped defensively. `already_reacted` / `no_reaction` are swallowed, because a
+reaction is never worth failing a run over.
+
+### `slack_upload_file`
+
+Upload a file into the thread. Preferred over a huge message for anything past ~3000
+characters, and for diffs, logs, and produced artifacts.
+
+| Param | | |
+|---|---|---|
+| `filename` | **required** | e.g. `report.md`, `patch.diff`, `chart.png`. |
+| `content` | **required** | File contents, or the base64 of the raw bytes. |
+| `encoding` | | `"utf8"` (default) or `"base64"`. |
+| `title` | | |
+| `initial_comment` | | Message shown alongside the file. |
+
+<Callout type="warn">
+Binary files (png, jpg, pdf, zip, …) **must** be base64-encoded with `encoding: "base64"`,
+or they arrive corrupted. Text files can be sent as-is.
+</Callout>
+
+Uploading is the three-step Slack external-upload flow: reserve a URL with
+`files.getUploadURLExternal`, POST the raw bytes, then `files.completeUploadExternal` to
+share it into the thread. Both metadata calls are form-encoded, because those endpoints
+reject a JSON body with `invalid_arguments`.
+
+### `slack_get_thread`
+
+Read recent messages in this thread, oldest first, for context the prompt didn't include.
+
+| Param | | |
+|---|---|---|
+| `limit` | | Default 50. |
+
+## The MCP server
+
+`src/mcp/server.ts` is a minimal **stateless** JSON-RPC server over streamable HTTP, with
+only what `claude mcp add --transport http` actually needs. No session ids, no SSE: every request
+is self-describing and authenticated by its own bearer token.
+
+| Method | |
+|---|---|
+| `initialize` | Protocol `2025-06-18`, `serverInfo: slack-thread`, plus instructions telling the agent that stdout reaches nobody. |
+| `notifications/initialized`, `notifications/cancelled` | Accepted, no response. |
+| `ping` | `{}` |
+| `tools/list` | The five tools above. |
+| `tools/call` | Invokes the tool. |
+| `resources/list`, `prompts/list` | Empty lists. |
+
+Behaviours the method list doesn't show:
+
+- **Tool failures are in-band.** A throwing tool returns a `result` with `isError: true` and
+  the message as text, not a JSON-RPC error, so the model can read what went wrong and
+  react instead of seeing a transport failure.
+- **Notifications never get a response**, not even a failure one. An all-notification batch
+  gets `202` with no body, per the MCP spec.
+- **`GET` and `DELETE` return 405** with `Allow: POST`. There is no server-initiated stream
+  and no session state to tear down.
+- **Batches are capped at 32 calls** and the body at **1 MB** (checked against
+  `content-length` before parsing). A batch is one client turn, not a work queue.
+
+## How the box gets connected
+
+`bootstrapMcp()` runs a script in the box that registers this server with Claude Code:
+
+```bash
+claude mcp add --scope user --transport http slack "$SLACK_MCP_URL" \
+  --header "Authorization: Bearer $SLACK_MCP_TOKEN"
+```
+
+It also writes `~/.claude/settings.json` pre-approving all five `mcp__slack__*` tools, so
+tool calls need no interactive approval. Neither the URL nor the token is interpolated into
+the shell string: the URL comes from the box env, the token from a file that the script
+deletes as soon as it has read it.
+
+See [Thread lifecycle](/docs/lifecycle#registering-mcp) and
+[Security](/docs/security#thread-scoped-mcp-tokens).
+
+## Where output actually goes
+
+The tool handlers only ever talk to the `Transport` interface:
+
+| Transport | |
+|---|---|
+| `SlackTransport` | Posts to one fixed channel + `thread_ts`. Links are never unfurled. |
+| `MemoryTransport` | Records everything into Durable Object storage; readable back through [`/api/threads/{id}/messages`](/docs/api). Keeps the last 500 entries, each with a monotonic `seq`. |
+
+That seam is why the Slack-free path exercises the real pipeline instead of a mock of it,
+and it's where a bridge to another chat platform would go.

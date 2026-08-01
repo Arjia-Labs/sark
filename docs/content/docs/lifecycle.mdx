@@ -1,0 +1,178 @@
+---
+title: Thread lifecycle
+description: Fork, bootstrap, prompt, watchdog, idle-stop, and every place the machine heals itself.
+---
+
+A thread is a Durable Object driven entirely by **persisted alarms**. Nothing important
+happens inline inside a request, because a request can be interrupted (a deploy, a throw
+mid-step) and would strand the queue with no alarm scheduled to pick it up.
+
+<Mermaid chart={`
+stateDiagram-v2
+    [*] --> idle
+    idle --> starting_box: message enqueued
+    starting_box --> waiting_box: box provisioning
+    waiting_box --> bootstrapping: box usable
+    bootstrapping --> running: prompt accepted
+    running --> running: watchdog poll (5s)
+    running --> idle: finished / failed / capped
+    idle --> archived: quiet for IDLE_STOP_SECONDS
+    archived --> waiting_box: next message resumes it
+`} />
+
+## Phases
+
+`GET /api/threads/{id}` reports one of five phases, derived from state rather than stored:
+
+| Phase | Meaning |
+|---|---|
+| `running` | a prompt is in flight (the watchdog is polling it) |
+| `idle` | nothing queued, nothing running |
+| `starting_box` | queued work, no box yet |
+| `waiting_box` | box exists but isn't in a usable state |
+| `bootstrapping` | box usable, MCP registration in progress |
+
+## One step at a time
+
+```
+alarm() → advance() → step()
+```
+
+`step()` does exactly one of three things:
+
+1. **A run is in flight** → `watchdog()`, and nothing else.
+2. **The queue is empty** → `maybeStopIdle()`.
+3. **Otherwise** → `ensureBox()` → `ensureMcp()` → `startPrompt()`.
+
+`advance()` serializes against itself with an in-memory promise, because an alarm and an
+inbound request can both land there at once.
+
+## Enqueue
+
+A message arriving:
+
+- is dropped if its Slack `event_id` was already seen (last 100 kept);
+- refreshes the session's Slack coordinates (a later mention can carry a fresher trigger `ts`);
+- is **refused** with a `🚫` notice if the queue already holds `MAX_QUEUED_PROMPTS` (20).
+  `/api` returns **429** for this, because a full queue is backpressure, not acceptance;
+- is truncated to `MAX_PROMPT_CHARS` (16,000). `/api` *rejects* over-long text with 413
+  instead, so only Slack input gets truncated;
+- schedules an alarm at 0ms and returns.
+
+## Getting a box
+
+`ensureBox()` returns true only when the box is usable *right now*.
+
+- **No box yet** → fork `TEMPLATE_BOX_ID` if set, otherwise create a fresh box. Either way
+  the box env is baked in at this moment (see [`boxEnv`](/docs/security#what-the-box-env-carries)).
+  After a fork, `ttlSeconds` and a readable name are set with a follow-up `PATCH`, since
+  `fork()` doesn't accept a TTL.
+- **`ready` / `idle` / `running`** → usable.
+- **`archived`** → resume it onto the same filesystem, clear the MCP registration flag, poll again.
+- **`error`** → fail the thread with a user-safe message.
+- **anything pending** (`init`, `provisioning`, `provisioned`, `cloning`, `archiving`) →
+  poll every 2s, up to a 180s ceiling from when the box was requested, then fail.
+
+## Registering MCP
+
+`ensureMcp()` re-registers when the box generation changed **or** the current token is past
+half its lifetime (6 of 12 hours). Each registration mints a *fresh* token bound to this
+thread and this box id.
+
+`bootstrapMcp()` writes the token to `/tmp/.slack-mcp-token`, then runs a script in the box
+that:
+
+1. reads `SLACK_MCP_URL` from the box env and the token from that file;
+2. **deletes the token file**, since the token now lives in the MCP registration;
+3. writes `~/.claude/settings.json` pre-approving the five `mcp__slack__*` tools, so tool
+   calls need no interactive approval;
+4. `claude mcp remove` then `claude mcp add --scope user --transport http slack "$SLACK_MCP_URL"`
+   with the bearer header.
+
+Neither the URL nor the token is ever interpolated into a shell string; the shell reads
+both itself. If the script dies before consuming the token, the file is removed anyway, and
+the token is redacted out of the logged failure detail.
+
+A follow-up `claude mcp list` health check runs, but an inconclusive result is only a
+warning: the agent may still connect on its own when the prompt runs.
+
+## Starting the prompt
+
+The **entire queue** drains into **one** turn. Every message piled up on the same thread,
+but each keeps its own sender and metadata, because merging the text alone would blame
+every request on whoever spoke first. See [Prompt construction](/docs/prompts).
+
+For Slack threads, the last 30 messages are fetched as history (minus the bot's own status
+message, which is noise to the model) and trimmed to 20.
+
+The prompt goes to `POST /boxes/{id}/prompt` with `BOX_PROVIDER` and optional `BOX_MODEL`,
+a `run` record is stored, the status message becomes `🤖 Working…`, and an :eyes: reaction
+goes on the triggering message.
+
+## The watchdog
+
+The agent is *supposed* to reply through MCP, and it can fail to: the registration can be
+missing after a resumed snapshot, the model can stop, the run can die. A DO alarm
+polls the prompt status every 5s:
+
+| Observation | What happens |
+|---|---|
+| status `failed` | finish with "The agent run failed inside the sandbox." |
+| 404 on the status call | finish with "The sandbox lost track of this run." |
+| `done` / `finished`, and the agent **did** post | `✅ Done in Ns` |
+| `done` / `finished`, and the agent posted **nothing** | recover the reply from the box event log and post that |
+| elapsed > `PROMPT_HARD_CAP_SECONDS` | finish with "Gave up waiting after Ns." |
+| elapsed > 90s, nothing said yet | edit the status to `🤖 Still working…` (once) |
+
+Recovery reads `type=response` events for this prompt id, drops streaming chunks, and takes
+the last non-empty content.
+
+**Silence also clears the MCP registration flag**, so the next turn re-bootstraps and the
+thread self-heals rather than staying mute forever.
+
+Whether the agent spoke is tracked by `invokeTool`: a successful `slack_post_message` or
+`slack_upload_file` increments `agentPosts` on the run.
+
+## Finishing
+
+`finishRun()` deletes the run record, posts or edits the final status, swaps :eyes: for
+:white_check_mark:, and drops `statusTs`. The status message belongs to **that run only**,
+so the next run gets a fresh one instead of overwriting the previous answer.
+
+Then: if the queue is non-empty, wake in 100ms and start the next turn. Otherwise wake in
+`IDLE_STOP_SECONDS`.
+
+## Idle and resume
+
+`maybeStopIdle()` archives the box once the thread has been quiet for
+`IDLE_STOP_SECONDS` (default 900s). Archiving snapshots the filesystem, so a later message
+resumes onto **the same files**, and the thread picks up where it left off with a fresh MCP
+token.
+
+`DELETE /api/threads/{id}` does the same stop, then wipes all Durable Object storage and
+the alarm.
+
+## When something fails
+
+`fail()` records the error, deletes the run, **clears the queue**, and says so:
+
+> ⚠️ &lt;user-safe message&gt;. 3 queued messages were dropped.
+
+Queued work that will never run is reported rather than dropped silently. Only errors
+written for a user (`SessionError.publicMessage`, `BoxApiError.publicMessage`) are shown;
+anything else becomes a generic line, because upstream bodies and sandbox stderr can carry
+internal identifiers. The details are in the Worker logs.
+
+A failed step consumed its alarm, so `fail()` schedules the idle-stop alarm explicitly.
+Otherwise the thread would go dormant with a live sandbox that `maybeStopIdle` never
+reaches.
+
+## Self-healing
+
+Two mechanisms, both cheap:
+
+- **`ensureAlarm(ms)`** schedules an alarm from every place with outstanding work, unless
+  one is already pending or the new target is meaningfully sooner.
+- **`ensureLiveness()`** schedules one in 5s if there's a run or a non-empty queue and **no**
+  alarm at all. It runs after every alarm *and* on every `state()` read, so polling
+  `GET /api/threads/{id}` re-arms a stranded thread for free.

@@ -1,0 +1,105 @@
+---
+title: Architecture
+description: One Worker, a Durable Object per thread, a forked sandbox, and a token that can address exactly one of them.
+---
+
+<Mermaid chart={`
+flowchart TB
+    subgraph slack["Slack"]
+        mention["@mention in a thread"]
+    end
+    subgraph worker["sark Worker (Hono)"]
+        ev["/slack/events<br/>verify · dedupe · allowlist"]
+        api["/api/*<br/>API_TOKEN"]
+        mcp["/mcp<br/>thread-scoped HMAC"]
+    end
+    do["ThreadSession (Durable Object)<br/>fork → bootstrap → prompt → watchdog → idle-stop"]
+    box[("Box sandbox<br/>claude-code")]
+
+    mention --> ev
+    ev --> do
+    api --> do
+    do -->|fork · POST /prompt| box
+    box -->|MCP over HTTP| mcp
+    mcp --> do
+    do -->|chat.postMessage| slack
+`} />
+
+## The pieces
+
+| Path | |
+|---|---|
+| `src/index.ts` | Hono app. Routes: `/health`, `/slack/events`, `/mcp`, `/api/*`. |
+| `src/do/ThreadSession.ts` | The state machine: fork → bootstrap → prompt → watchdog → idle-stop. |
+| `src/box/client.ts` | Typed client for the Box API v1. |
+| `src/box/bootstrap.ts` | Registers this Worker's MCP server inside a box. |
+| `src/mcp/server.ts` | Stateless JSON-RPC MCP server over streamable HTTP. |
+| `src/mcp/tools.ts` | The five Slack tools and their handlers. |
+| `src/prompt.ts` | Builds the turn: history, per-message blocks, agent instructions. |
+| `src/transport.ts` | `Transport` interface; `MemoryTransport` (the testing sink). |
+| `src/slack/verify.ts` | Slack signature verification. |
+| `src/slack/events.ts` | Pure event interpretation: what to ignore, what to run. |
+| `src/slack/api.ts` | `SlackClient` + `SlackTransport`. |
+| `src/auth/token.ts` | Thread-scoped HMAC tokens. |
+| `src/config.ts` | `Env`, `num()`, `idList()`, `isAllowed()`. |
+
+## One Durable Object per thread
+
+`THREAD_SESSIONS.idFromName(threadId)` maps a thread id to a Durable Object. For Slack
+that id is `{team}:{channel}:{thread_ts}`; for `/api` it's any opaque string you choose.
+Both resolve through the same function, which is why a live Slack thread is inspectable
+through the control API.
+
+Everything a thread owns lives in that object's storage:
+
+| Key | |
+|---|---|
+| `session` | box id and state, transport kind, Slack coords, MCP registration, last error, `statusTs` |
+| `run` | the in-flight prompt: id, status, start time, how many times the agent has posted |
+| `queue` | messages waiting for the current run to finish (max 20) |
+| `messages` | what `MemoryTransport` recorded (last 500) |
+| `seenEvents` | last 100 Slack `event_id`s, for dedup |
+
+Because a thread is a single object, **one run per thread** is a structural property rather
+than a lock: `step()` sees an active `run` and goes to the watchdog instead of starting
+anything. Different threads never contend; each has its own box.
+
+## Three entry points, one path
+
+The three public routes are three different *triggers* for the same machine:
+
+- **`/slack/events`** verifies the signature, drops retries, interprets the event, checks the
+  allowlist, then enqueues. Real work happens in `waitUntil()` after the 200 has gone out,
+  because Slack demands a 200 within 3s.
+- **`/api/*`** is the same enqueue behind `API_TOKEN`, plus read routes over the same state.
+- **`/mcp`** is the *return* path: the box calling back. The bearer token names the thread,
+  so nothing in the request body can change which thread is addressed.
+
+The transport is what differs, not the pipeline. `MemoryTransport` and `SlackTransport`
+implement the same interface, and the Durable Object only ever talks to that interface, so
+the Slack-free path exercises the real code instead of a mock of it.
+
+## The state machine
+
+Work is driven by **Durable Object alarms**, never inline in a request:
+
+```
+alarm → advance() → step()
+                     ├─ run in flight?      → watchdog()
+                     ├─ queue empty?        → maybeStopIdle()
+                     └─ else                → ensureBox() → ensureMcp() → startPrompt()
+```
+
+Each of those steps either completes or schedules the next alarm. `advance()` serializes
+against itself (an alarm and an inbound request can both land there), and
+`ensureLiveness()` re-arms a thread that has outstanding work but no alarm, which heals a
+step that died before scheduling its successor.
+
+Details in [Thread lifecycle](/docs/lifecycle).
+
+## Why a Worker at all
+
+The box is the thing that runs code; the Worker is the thing that decides *which* box, for
+*which* thread, on *whose* behalf, and *for how long*. Keeping that in one stateless Worker
+plus per-thread Durable Objects means there is no database, no queue, and no server to
+operate, and the security boundary is a token format rather than a network topology.

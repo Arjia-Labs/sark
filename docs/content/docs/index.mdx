@@ -1,0 +1,59 @@
+---
+title: Welcome
+description: Mention a bot in Slack; it forks a cloud sandbox for that thread and runs a coding agent inside it.
+---
+
+`sark` is a single Cloudflare Worker that turns a Slack thread into a sandboxed agent
+session. Mention the bot, and it forks a cloud sandbox on
+[ascii.dev Box](https://docs.ascii.dev/box/api/v1) for that thread. A coding agent runs
+inside it and talks back through an MCP server hosted by the same Worker, using a token
+that can only ever address the one thread it was minted for.
+
+It's named after Tron's **S**lack **A**gent **R**untime **K**ernel — the Master Control
+Program's lieutenant, who commands Programs on the Grid.
+
+## Why
+
+Running a coding agent from chat is easy to demo and hard to make safe. The moment more
+than one person can mention the bot, you need answers to:
+
+- where does the agent's code actually *run*, and what else can it touch?
+- how do two threads avoid trampling each other's files?
+- what stops a public channel from spinning up unbounded sandboxes?
+- what happens when the agent finishes but never says anything?
+- when five people talk at once, who does the agent think it's answering?
+
+Every one of those is a design decision in this repo, and each has a page here.
+
+## At a glance
+
+| | |
+|---|---|
+| **One sandbox per thread** | Each Slack thread forks its own Box. Conversation and filesystem stay in sync; threads never contend. |
+| **Thread-scoped MCP tokens** | Stateless HMAC naming one thread *and* one box generation, with an enforced issue time. A leaked token addresses nothing else. |
+| **Fail-closed allowlist** | Empty `ALLOWED_CHANNELS`/`ALLOWED_USERS` refuses *every* mention. You opt channels in, never out. |
+| **Watchdog** | A Durable Object alarm polls the run; if the agent finishes silently, the reply is recovered from the box event log and posted anyway. |
+| **Batched turns** | Messages arriving mid-run queue and drain into one turn, each as its own `<message>` block with its own sender. |
+| **Prompt-injection hardening** | Message bodies, display names, and metadata are untrusted; block delimiters are neutralized inside them. |
+| **Idle lifecycle** | Boxes archive (snapshot) after `IDLE_STOP_SECONDS` and resume onto the same filesystem on the next message. |
+| **Slack-free testing** | `MemoryTransport` records everything the agent "says", so the whole pipeline is scriptable with no Slack app at all. |
+| **One Worker, no infra** | Hono on Cloudflare Workers plus a Durable Object per thread. No database, no queue, no server. |
+
+## Where to go next
+
+- [Getting started](/docs/getting-started) covers requirements, local setup, and the core loop.
+- [Quickstart](/docs/getting-started/quickstart) drives a thread end to end with no Slack app.
+- [Connect Slack](/docs/getting-started/slack) covers the manifest, secrets, and allowlist.
+- [Architecture](/docs/architecture) explains each piece and how a request flows.
+- [Control API](/docs/api) documents the six `/api` routes.
+- [Security model](/docs/security) covers tokens, trust boundaries, and the limits that bound them.
+
+## Not in scope
+
+`sark` is deliberately small. It does **not** try to be:
+
+- an agent runtime; the agent is whatever `BOX_PROVIDER` points at, and this just gives it a thread to live in
+- a multi-tenant SaaS; one Worker, one Box account, one workspace's allowlist
+- a general Slack framework; five tools, two event types, one dropdown, no slash commands
+- a job queue; one run per thread, a bounded backlog, no cross-thread scheduling
+- a bridge to other chat platforms, though `Transport` is the seam where one would go

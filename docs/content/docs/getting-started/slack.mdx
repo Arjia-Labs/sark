@@ -1,0 +1,129 @@
+---
+title: Connect Slack
+description: Create the app from the manifest, set two secrets, and opt channels into a fail-closed allowlist.
+---
+
+Slack is optional. Everything below is about wiring the *trigger* and the *output sink*;
+the pipeline in between is identical to what [`/api`](/docs/api) drives.
+
+## Create the app
+
+Create a Slack app from `slack-manifest.json` in the repo root, install it into your
+workspace, then set the two secrets:
+
+```bash
+npx wrangler secret put SLACK_BOT_TOKEN      # xoxb-...
+npx wrangler secret put SLACK_SIGNING_SECRET
+```
+
+Point the app's Event Subscriptions request URL at:
+
+```
+https://<your-worker>.workers.dev/slack/events
+```
+
+The Worker answers Slack's `url_verification` challenge on that route automatically.
+
+If `SLACK_SIGNING_SECRET` is unset, `/slack/events` returns **503** rather than accepting
+unverified traffic.
+
+Interactivity is enabled and points at:
+
+```
+https://<your-worker>.workers.dev/slack/interactive
+```
+
+<Callout>
+That route handles only the 🧠 reasoning-effort dropdown, which a reaction cannot express. It
+verifies the signature and runs the **same `isAllowed` gate** as a mention before acting on
+any payload.
+</Callout>
+
+Emoji controls also need the `reactions:read` scope and the `reaction_added` bot event, both
+already in `slack-manifest.json`. Note that `reactions:read` means the app sees every
+reaction in allowlisted channels; only the six control emoji are ever acted on.
+
+## The allowlist
+
+Set these in `wrangler.jsonc` as comma-separated Slack IDs:
+
+```jsonc title="wrangler.jsonc"
+"ALLOWED_CHANNELS": "C0123456789,C0987654321",
+"ALLOWED_USERS": "",
+"ALLOWED_TEAMS": "T0123456789"
+```
+
+The rule, from `isAllowed()`:
+
+1. If `ALLOWED_TEAMS` is non-empty, the event's team **must** be in it. Otherwise the
+   workspace check is skipped.
+2. If **both** `ALLOWED_CHANNELS` and `ALLOWED_USERS` are empty → **refused**, always.
+3. Otherwise: allowed if the channel is listed **or** the user is listed.
+
+**The allowlist fails closed.** With both lists empty, every mention is refused with a
+notice in-thread. This is what stops a public channel from spinning up unbounded sandboxes.
+You opt channels in; you never opt them out.
+
+<Callout type="warn">
+The allowlist gates `/slack/events` **only**. `/api` is behind `API_TOKEN` and bypasses it
+by design. See [Security](/docs/security#api_token-is-full-bot-authority).
+</Callout>
+
+A refused mention gets `notifyRejected()`: a `🚫` message in the thread explaining why, and
+**no box is created**. The rejection notice is deduped on `event_id` like any other event.
+
+## Talking to the bot
+
+`interpret()` decides what to do with an incoming event, and it ignores most things:
+
+| Ignored | Why |
+|---|---|
+| anything with `bot_id` | never react to ourselves |
+| anything with a `subtype` | edits, joins, channel-topic changes |
+| any type other than `app_mention` or a DM `message` | one event type, one DM path |
+| incomplete events (no team / channel / user / ts) | nothing to address |
+| empty text after stripping the mention | nothing to do |
+
+What's accepted:
+
+- **`@sark do the thing`** in a channel. A top-level mention starts a thread; a mention
+  inside a thread joins it.
+- **A DM** to the bot (`channel_type: "im"`), where no mention prefix is needed.
+
+The thread id is `{team}:{channel}:{thread_ts}`, which is also the Durable Object name, so
+a live Slack conversation can be inspected through the [control API](/docs/api) using that
+exact string.
+
+Leading `<@U…>` mentions are stripped from the text before it reaches the agent.
+
+### Stopping a run
+
+Say **`stop`** (or `cancel`, `abort`, `halt`) as the *entire* message to interrupt the
+running agent. The run is killed, the queue is cleared, and the status message becomes
+`🛑 Interrupted.` A stop with nothing running still gets an answer rather than silence.
+
+## What the thread looks like
+
+A run posts **one** status message and edits it in place:
+
+| | |
+|---|---|
+| `⚙️ Starting a sandbox…` | forking or creating the box |
+| `⚙️ Waking the sandbox back up…` | resuming an archived box |
+| `🤖 Working… \`box_…\`` | prompt is running |
+| `🤖 Still working… \`box_…\`` | after 90s with nothing said yet |
+| `✅ Done in Ns · \`box_…\`` | finished, agent spoke for itself |
+| `⚠️ …` | failure, with a user-safe message |
+| `🛑 Interrupted.` | stopped |
+
+The bot also adds :eyes: when a run starts and swaps it for :white_check_mark: when it
+finishes. Reactions are cosmetic; a failure to add one never fails a run.
+
+## Retries and duplicates
+
+Slack re-delivers an event with the same `event_id` if it doesn't get a 200 within 3
+seconds. `sark` acks fast and **drops retries at the edge** (`x-slack-retry-num`), because
+reprocessing them is what produced duplicate sandbox runs. `event_id` dedup inside the
+Durable Object (last 100 ids) is the backstop.
+
+Real work happens in `waitUntil()` after the 200 has already gone out.
