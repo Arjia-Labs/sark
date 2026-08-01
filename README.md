@@ -82,7 +82,8 @@ threads share a filesystem.
 - A Slack app is **optional** — the `/api` surface exercises the whole pipeline without it.
 
 Throughout the docs, `https://<your-worker>.workers.dev` stands in for your own deployed
-origin. Replace it, and set the same value as `PUBLIC_URL` in `wrangler.jsonc`.
+origin. Your real settings go in `.deploy.env` (gitignored), never in `wrangler.jsonc` —
+see [Setup](#-setup).
 
 ## 🚀 Quickstart
 
@@ -171,7 +172,7 @@ that already has your stack, repos, and MCP settings.
 ```bash
 box new                      # 📦 install your stack, clone repos
 box stop <id>                # 📸 the snapshot IS the template
-# set TEMPLATE_BOX_ID=<id> in wrangler.jsonc
+# put TEMPLATE_BOX_ID=<id> in .deploy.env
 ```
 
 Keep the template stopped; resume → update → stop to publish a new version.
@@ -182,10 +183,25 @@ Keep the template stopped; resume → update → stop to publish a new version.
 npx wrangler secret put BOX_API_KEY        # box_... from the Box dashboard
 npx wrangler secret put MCP_TOKEN_SECRET   # any long random string
 npx wrangler secret put API_TOKEN          # guards /api
-npx wrangler deploy
 ```
 
-Set `PUBLIC_URL` in `wrangler.jsonc` to the deployed origin — the box reads it to find `/mcp`.
+Then put your settings in **`.deploy.env`** (gitignored) and deploy:
+
+```bash
+WORKER_NAME=sark
+PUBLIC_URL=https://<your-worker>.workers.dev   # the box reads this to find /mcp
+ALLOWED_CHANNELS=C0123456789
+ALLOWED_TEAMS=T0123456789
+```
+
+```bash
+npm run deploy
+```
+
+`wrangler.jsonc` is the **public template** and stays that way: placeholder origin, empty
+allowlists, no `account_id`. `npm run deploy` injects your values as wrangler overrides, and
+`npm run check-config` fails the build if real ones ever reach the tracked file. Nothing
+personal can be committed by accident.
 
 ### 3. Slack (optional)
 
@@ -196,7 +212,7 @@ npx wrangler secret put SLACK_BOT_TOKEN      # xoxb-...
 npx wrangler secret put SLACK_SIGNING_SECRET
 ```
 
-Set `ALLOWED_CHANNELS` / `ALLOWED_USERS` in `wrangler.jsonc` (and optionally `ALLOWED_TEAMS`
+Set `ALLOWED_CHANNELS` / `ALLOWED_USERS` in `.deploy.env` (and optionally `ALLOWED_TEAMS`
 to pin the workspace). **The allowlist fails closed** — with both empty, every mention is
 refused. This is what stops a public channel from spinning up unbounded sandboxes. It gates
 `/slack/events` only; `/api` is behind `API_TOKEN` and bypasses it by design.
@@ -314,7 +330,8 @@ Different threads never contend; each has its own box.
 
 | Path | |
 |---|---|
-| `src/index.ts` | routes: `/slack/events`, `/mcp`, `/api/*` |
+| `src/index.ts` | worker entry: exports the app and the Durable Object |
+| `src/app.ts` | routes: `/slack/events`, `/slack/interactive`, `/mcp`, `/api/*` |
 | `src/do/ThreadSession.ts` | the state machine: fork → bootstrap → prompt → watchdog → idle-stop |
 | `src/box/client.ts` | Box API v1 client |
 | `src/box/bootstrap.ts` | registers this Worker's MCP server inside a box |
@@ -323,6 +340,8 @@ Different threads never contend; each has its own box.
 | `src/slack/` | signature verification, event interpretation, `SlackTransport` |
 | `scripts/drive.ts` | CLI that drives a thread end to end |
 | `scripts/box-smoke.ts` | Box credentials/template check, independent of the Worker |
+| `scripts/deploy.sh` | deploy with your `.deploy.env` settings injected as overrides |
+| `scripts/check-config-clean.sh` | fails if personal settings reach the tracked `wrangler.jsonc` |
 
 ## 🙅 Not in scope
 

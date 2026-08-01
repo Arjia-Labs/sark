@@ -13,7 +13,7 @@ description: The three scripts you actually run, and what each one proves.
 | `npm run smoke` | verify Box credentials and template |
 | `npm run drive` | drive a thread end to end |
 
-All three scripts read `.dev.vars` themselves (via `scripts/env.ts`), and an environment
+The three Node scripts read `.dev.vars` themselves (via `scripts/env.ts`), and an environment
 variable always wins over the file.
 
 ## `drive`: talk to a thread
@@ -75,6 +75,31 @@ generated `MCP_TOKEN_SECRET` / `API_TOKEN`. **No secret is ever typed, pasted, o
 
 It refuses to overwrite an existing `.dev.vars`, so delete it first to regenerate. Needs `jq`
 and `openssl`. Details in [Install](/docs/getting-started/install#generate-dev-vars).
+
+## `deploy`: ship it with your own settings
+
+```bash
+npm run deploy            # reads .deploy.env, injects it as wrangler overrides
+npm run deploy -- --dry-run
+```
+
+Anything after `--` is passed straight to `wrangler deploy`. `WORKER_NAME` and `PUBLIC_URL`
+are required; the rest are optional and simply left at whatever `wrangler.jsonc` says, which
+for the allowlists is empty and therefore fails closed.
+
+## `check-config`: keep the template clean
+
+```bash
+npm run check-config
+```
+
+Fails if a real origin, a non-empty allowlist, an `account_id`, or a literal Slack/Box id
+reaches the tracked `wrangler.jsonc`. It reads the **staged** copy, so editing the file
+locally is fine — only committing it is not. Runs in CI, and works as a pre-commit hook:
+
+```bash
+ln -s ../../scripts/check-config-clean.sh .git/hooks/pre-commit
+```
 
 ## Curl, if you'd rather
 

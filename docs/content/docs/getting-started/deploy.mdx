@@ -12,7 +12,7 @@ your MCP settings, so a thread is useful the second it starts.
 ```bash
 box new                      # install your stack, clone repos
 box stop <id>                # the snapshot IS the template
-# set TEMPLATE_BOX_ID=<id> in wrangler.jsonc
+# put TEMPLATE_BOX_ID=<id> in .deploy.env
 ```
 
 Keep the template **stopped**. To publish a new version: resume → update → stop.
@@ -29,7 +29,6 @@ logged and non-fatal.
 npx wrangler secret put BOX_API_KEY        # box_... from the Box dashboard
 npx wrangler secret put MCP_TOKEN_SECRET   # any long random string
 npx wrangler secret put API_TOKEN          # guards /api
-npx wrangler deploy
 ```
 
 | Secret | If unset |
@@ -41,11 +40,42 @@ npx wrangler deploy
 Rotating `MCP_TOKEN_SECRET` invalidates every token currently sitting inside a live
 sandbox. Those threads recover on their next turn, when `ensureMcp` re-registers.
 
-## 3. Set `PUBLIC_URL`
+## 3. Set `PUBLIC_URL` and deploy
 
-```jsonc title="wrangler.jsonc"
-"PUBLIC_URL": "https://<your-worker>.workers.dev"
+Your settings live in **`.deploy.env`**, which is gitignored:
+
+```bash title=".deploy.env"
+WORKER_NAME=sark
+PUBLIC_URL=https://<your-worker>.workers.dev
+ALLOWED_CHANNELS=
+ALLOWED_USERS=
+ALLOWED_TEAMS=
+TEMPLATE_BOX_ID=
+CLOUDFLARE_ACCOUNT_ID=
 ```
+
+```bash
+npm run deploy
+```
+
+<Callout>
+**Don't put these in `wrangler.jsonc`.** It is the public template — placeholder origin,
+empty allowlists, no `account_id` — and `npm run deploy` injects your values as wrangler
+CLI overrides instead. Overrides rather than a second config file, because wrangler does
+not merge configs and a local copy would silently miss any binding added to the tracked one.
+
+`npm run check-config` fails if real values reach the tracked file, and runs in CI. Wire it
+up locally too:
+
+```bash
+ln -s ../../scripts/check-config-clean.sh .git/hooks/pre-commit
+```
+</Callout>
+
+There is a chicken-and-egg here: `PUBLIC_URL` has to be the Worker's own origin, which you
+can't know until it exists. So the **first** deploy runs without it
+(`npx wrangler deploy --name sark`), you read the origin off the output, and the second
+deploy has it right.
 
 This is the one var that *must* be right. It is baked into each box's environment as
 `SLACK_MCP_URL` (`${PUBLIC_URL}/mcp`) at fork time, and it is how the agent finds its way

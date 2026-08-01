@@ -46,12 +46,12 @@ reaction in allowlisted channels; only the six control emoji are ever acted on.
 
 ## The allowlist
 
-Set these in `wrangler.jsonc` as comma-separated Slack IDs:
+Set these in `.deploy.env` as comma-separated Slack IDs, then `npm run deploy`:
 
-```jsonc title="wrangler.jsonc"
-"ALLOWED_CHANNELS": "C0123456789,C0987654321",
-"ALLOWED_USERS": "",
-"ALLOWED_TEAMS": "T0123456789"
+```bash title=".deploy.env"
+ALLOWED_CHANNELS=C0123456789,C0987654321
+ALLOWED_USERS=
+ALLOWED_TEAMS=T0123456789
 ```
 
 The rule, from `isAllowed()`:

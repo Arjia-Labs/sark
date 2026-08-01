@@ -3,8 +3,16 @@ title: Configuration
 description: Every var and secret, with what happens if you leave it unset.
 ---
 
-Secrets go in via `wrangler secret put` (or `.dev.vars` locally); everything else lives in
-`vars` in `wrangler.jsonc`.
+Secrets go in via `wrangler secret put` (or `.dev.vars` locally); everything else is a
+`var`.
+
+<Callout>
+`wrangler.jsonc` is a **public template**, not where your settings live. The values that
+identify a deployment — `PUBLIC_URL`, the allowlists, `TEMPLATE_BOX_ID`, and the worker name
+— belong in `.deploy.env` (gitignored), and `npm run deploy` injects them as wrangler
+overrides. `npm run check-config` fails if real values reach the tracked file, and runs in
+CI. The rest of the vars are ordinary tuning knobs and can be edited in place.
+</Callout>
 
 ## Secrets
 
@@ -20,6 +28,8 @@ Secrets go in via `wrangler secret put` (or `.dev.vars` locally); everything els
 [Install](/docs/getting-started/install#generate-dev-vars).
 
 ## Vars
+
+Defaults as committed:
 
 ```jsonc title="wrangler.jsonc"
 "vars": {
