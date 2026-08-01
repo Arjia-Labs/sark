@@ -80,6 +80,10 @@ the code isn't worth the maintenance.
 `account_id`. Your real values live in `.deploy.env`, which is gitignored, and
 `npm run deploy` injects them as wrangler CLI overrides. One config file, so nothing drifts.
 
+Because the tracked name is a placeholder, bare `wrangler tail` and `wrangler dev` look for
+a worker that doesn't exist on your account. Use `npm run tail` and `npm run dev`, which read
+`WORKER_NAME` from `.deploy.env` and pass it through.
+
 `npm run check-config` fails if real values reach the tracked config. It runs in CI, and is
 worth installing locally:
 

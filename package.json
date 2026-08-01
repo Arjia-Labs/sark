@@ -5,14 +5,15 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "bash scripts/wrangler.sh dev",
     "deploy": "bash scripts/deploy.sh",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "smoke": "tsx scripts/box-smoke.ts",
     "drive": "tsx scripts/drive.ts",
     "dev-vars": "bash scripts/dev-vars.sh",
-    "check-config": "bash scripts/check-config-clean.sh"
+    "check-config": "bash scripts/check-config-clean.sh",
+    "tail": "bash scripts/wrangler.sh tail"
   },
   "dependencies": {
     "hono": "^4.6.14"
