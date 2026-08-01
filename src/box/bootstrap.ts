@@ -36,8 +36,14 @@ const SETTINGS = JSON.stringify(
 
 const SERVER_NAME = "slack";
 
-/** Handoff location for the bearer token. Removed by the script that consumes it. */
-const TOKEN_PATH = "/tmp/.slack-mcp-token";
+/**
+ * Handoff location for the bearer token. Removed by the script that consumes it.
+ *
+ * Relative on purpose: the Box files API rejects absolute paths
+ * ("Path must be relative to the Box work directory"), and `command` runs from that
+ * same work directory, so both sides agree on where this is.
+ */
+const TOKEN_PATH = ".slack-mcp-token";
 
 export async function bootstrapMcp(
   box: BoxClient,
