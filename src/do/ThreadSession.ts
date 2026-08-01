@@ -14,7 +14,12 @@ import { num, type Env } from "../config.ts";
 import { callTool } from "../mcp/tools.ts";
 import { buildPrompt } from "../prompt.ts";
 import { SlackClient, SlackTransport } from "../slack/api.ts";
-import { effortPickerBlocks, OFFERED_REACTIONS, type ControlAction } from "../slack/controls.ts";
+import {
+  effortPickerBlocks,
+  statusBlocks,
+  type ControlAction,
+  type StatusPhase,
+} from "../slack/controls.ts";
 import { slackThreadId } from "../slack/events.ts";
 import { MemoryTransport, type ThreadMessage, type Transport } from "../transport.ts";
 
@@ -179,23 +184,28 @@ export class ThreadSession extends DurableObject<Env> {
     return new MemoryTransport(this.messageLog());
   }
 
-  /** Post/replace the single status message that tracks this run. */
-  private async status(s: SessionState, text: string): Promise<void> {
+  /**
+   * Post/replace the single status message that tracks this run, carrying the controls
+   * that make sense for the current phase. Buttons rather than seeded reactions: they
+   * are labelled, they leave no permanent counters on a finished message, and they can
+   * disappear once they stop meaning anything.
+   */
+  private async status(
+    s: SessionState,
+    text: string,
+    phase: StatusPhase = "done",
+  ): Promise<void> {
     const transport = this.transport(s);
+    // Blocks are a Slack construct; MemoryTransport records the text and ignores them.
+    const message =
+      transport.kind === "slack" ? { text, blocks: statusBlocks(text, phase) } : { text };
     try {
       if (s.statusTs) {
-        await transport.updateMessage(s.statusTs, { text });
+        await transport.updateMessage(s.statusTs, message);
       } else {
-        const { ts } = await transport.postMessage({ text });
+        const { ts } = await transport.postMessage(message);
         s.statusTs = ts;
         await this.putSession(s);
-        // Seed the control affordances on the status message so they are discoverable
-        // without documentation. Slack only; in memory they would just be log noise.
-        if (transport.kind === "slack") {
-          for (const name of OFFERED_REACTIONS) {
-            await transport.addReaction(name, ts).catch(() => {});
-          }
-        }
       }
     } catch (err) {
       console.error("status message failed", (err as Error).message);
@@ -759,7 +769,7 @@ export class ThreadSession extends DurableObject<Env> {
     const ttl = num(this.env.BOX_TTL_SECONDS, 3600);
 
     if (!s.boxId) {
-      await this.status(s, "⚙️ Starting a sandbox…");
+      await this.status(s, "⚙️ Starting a sandbox…", "working");
       const template = (this.env.TEMPLATE_BOX_ID ?? "").trim();
       const env = this.envFor(s.threadId, s.slack);
       const created = template
@@ -789,7 +799,7 @@ export class ThreadSession extends DurableObject<Env> {
     if (info.state === "archived") {
       // The box was stopped (idle timeout or TTL). Resume it onto the same filesystem
       // and re-register MCP with a freshly minted token.
-      await this.status(s, "⚙️ Waking the sandbox back up…");
+      await this.status(s, "⚙️ Waking the sandbox back up…", "working");
       await this.box.resume(s.boxId!);
       s.mcpBoxId = undefined;
       s.boxRequestedAt = Date.now();
@@ -940,7 +950,7 @@ export class ThreadSession extends DurableObject<Env> {
     s.lastPrompt = { text: promptText, model, effort: opts.effort };
     await this.putSession(s);
 
-    await this.status(s, opts.note ?? `🤖 Working… \`${s.boxId}\``);
+    await this.status(s, opts.note ?? `🤖 Working… \`${s.boxId}\``, "working");
     try {
       await this.transport(s).addReaction("eyes");
     } catch {
@@ -1000,7 +1010,7 @@ export class ThreadSession extends DurableObject<Env> {
     if (elapsed > 90_000 && !r.warnedSlow) {
       r.warnedSlow = true;
       await this.ctx.storage.put("run", r);
-      if (r.agentPosts === 0) await this.status(s, `🤖 Still working… \`${s.boxId}\``);
+      if (r.agentPosts === 0) await this.status(s, `🤖 Still working… \`${s.boxId}\``, "working");
     }
     await this.wake(WATCHDOG_MS);
   }

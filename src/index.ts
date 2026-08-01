@@ -5,7 +5,7 @@ import { isAllowed, type Env } from "./config.ts";
 import { MAX_PROMPT_CHARS, type PromptRequest, type ThreadSession } from "./do/ThreadSession.ts";
 import { handleMcpRequest } from "./mcp/server.ts";
 import { SlackClient } from "./slack/api.ts";
-import { EFFORT_ACTION_ID, isEffort } from "./slack/controls.ts";
+import { buttonAction, EFFORT_ACTION_ID, isEffort } from "./slack/controls.ts";
 import {
   interpret,
   isInterruptCommand,
@@ -232,6 +232,7 @@ app.post("/slack/interactive", async (c) => {
     team?: { id?: string };
     channel?: { id?: string };
     message?: { thread_ts?: string; ts?: string };
+    trigger_id?: string;
     actions?: { action_id?: string; selected_option?: { value?: string } }[];
   };
   try {
@@ -253,15 +254,29 @@ app.post("/slack/interactive", async (c) => {
   // could drive the sandbox.
   if (!isAllowed(c.env, { team, channel, user }).ok) return c.body(null, 200);
 
+  const threadId = slackThreadId(team, channel, threadTs);
+
   if (action.action_id === EFFORT_ACTION_ID) {
     const effort = action.selected_option?.value;
     if (!isEffort(effort)) return c.body(null, 200);
-    const threadId = slackThreadId(team, channel, threadTs);
     c.executionCtx.waitUntil(
       session(c.env, threadId)
         .retryWithEffort(effort, user)
         .then(() => {})
         .catch((err: Error) => console.error("effort retry failed", err.stack)),
+    );
+    return c.body(null, 200);
+  }
+
+  // Status-message buttons. Slack has already shown the confirm dialog for the
+  // destructive ones, so reaching here means the user went through with it.
+  const control = buttonAction(action.action_id ?? "");
+  if (control) {
+    c.executionCtx.waitUntil(
+      session(c.env, threadId)
+        .control(control, { actor: user, eventId: payload.trigger_id })
+        .then(() => {})
+        .catch((err: Error) => console.error("button control failed", err.stack)),
     );
   }
 

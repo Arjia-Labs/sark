@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buttonAction,
+  BUTTON_ACTIONS,
   controlFor,
   effortPickerBlocks,
   EFFORT_ACTION_ID,
   EFFORT_LEVELS,
   isEffort,
-  OFFERED_REACTIONS,
+  statusBlocks,
   CONTROL_REACTIONS,
 } from "../src/slack/controls.ts";
 import { interpret, type SlackEventEnvelope } from "../src/slack/events.ts";
@@ -30,17 +32,6 @@ function reaction(over: Record<string, unknown> = {}): SlackEventEnvelope {
 }
 
 describe("control reactions", () => {
-  it("maps each offered reaction to an action", () => {
-    for (const name of OFFERED_REACTIONS) {
-      expect(controlFor(name)).not.toBeNull();
-    }
-  });
-
-  it("offers every action it knows about", () => {
-    const offered = new Set(OFFERED_REACTIONS.map((n) => controlFor(n)));
-    expect(offered).toEqual(new Set(Object.values(CONTROL_REACTIONS)));
-  });
-
   it("ignores emoji that mean nothing to us", () => {
     expect(controlFor("tada")).toBeNull();
     expect(controlFor("")).toBeNull();
@@ -100,6 +91,59 @@ describe("interpret(reaction_added)", () => {
       event: { type: "app_mention", user: "U1", channel: "C1", ts: "9.9", text: "<@B> hi" },
     } as SlackEventEnvelope);
     expect(d.kind).toBe("prompt");
+  });
+});
+
+describe("status buttons", () => {
+  type Btn = { action_id: string; text: { text: string }; confirm?: unknown; style?: string };
+  const buttons = (phase: "working" | "done") =>
+    (statusBlocks("x", phase) as { type: string; elements?: Btn[] }[]).find(
+      (b) => b.type === "actions",
+    )!.elements!;
+
+  it("puts the message text in a section block", () => {
+    const [section] = statusBlocks("hello", "done") as { type: string; text: { text: string } }[];
+    expect(section?.type).toBe("section");
+    expect(section?.text.text).toBe("hello");
+  });
+
+  it("offers stopping and watching while a run is going", () => {
+    expect(buttons("working").map((b) => b.action_id)).toEqual(["sark_interrupt", "sark_desktop"]);
+  });
+
+  it("drops stop once the run is over, since it would do nothing", () => {
+    const ids = buttons("done").map((b) => b.action_id);
+    expect(ids).not.toContain("sark_interrupt");
+    expect(ids).toEqual(["sark_retry", "sark_escalate", "sark_fork", "sark_archive"]);
+  });
+
+  it("guards the destructive controls behind a confirm dialog", () => {
+    const done = buttons("done");
+    for (const id of ["sark_fork", "sark_archive"]) {
+      expect(done.find((b) => b.action_id === id)?.confirm).toBeDefined();
+    }
+    // Re-running is cheap and reversible; it should not cost a second click.
+    expect(done.find((b) => b.action_id === "sark_retry")?.confirm).toBeUndefined();
+  });
+
+  it("uses unique action ids per block, which Slack requires", () => {
+    for (const phase of ["working", "done"] as const) {
+      const ids = buttons(phase).map((b) => b.action_id);
+      expect(new Set(ids).size).toBe(ids.length);
+    }
+  });
+
+  it("maps every button id to a real action", () => {
+    for (const phase of ["working", "done"] as const) {
+      for (const b of buttons(phase)) expect(buttonAction(b.action_id)).not.toBeNull();
+    }
+    expect(buttonAction("sark_nonsense")).toBeNull();
+  });
+
+  it("covers the same actions as the reactions do", () => {
+    expect(new Set(Object.values(BUTTON_ACTIONS))).toEqual(
+      new Set(Object.values(CONTROL_REACTIONS)),
+    );
   });
 });
 

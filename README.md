@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/typescript-5.7-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 5.7">
   <img src="https://img.shields.io/badge/cloudflare-workers-F38020?style=flat-square&logo=cloudflare&logoColor=white" alt="Cloudflare Workers">
   <img src="https://img.shields.io/badge/durable-objects-F38020?style=flat-square&logo=cloudflare&logoColor=white" alt="Durable Objects">
-  <img src="https://img.shields.io/badge/tests-82_passing-success?style=flat-square" alt="82 tests">
+  <img src="https://img.shields.io/badge/tests-87_passing-success?style=flat-square" alt="87 tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT licensed">
   <img src="https://img.shields.io/badge/slack-optional-4A154B?style=flat-square&logo=slack&logoColor=white" alt="Slack optional">
 </p>
@@ -65,7 +65,7 @@ threads share a filesystem.
 | 📬 **Batched turns** | Messages arriving mid-run queue and drain into **one** turn, each as its own `<message>` block with its own sender, so the agent attributes requests correctly. |
 | 🛡️ **Prompt-injection hardening** | Message bodies, display names, and metadata are untrusted: block delimiters are neutralized so nobody can speak under another user's name. |
 | 💤 **Idle lifecycle** | Boxes archive (snapshot) after `IDLE_STOP_SECONDS` and resume onto the same filesystem on the next message. |
-| 🎛️ **Emoji controls** | React to drive the sandbox: 🛑 interrupt · ♻️ re-run · 🧠 change effort · 🍴 fork · 🖥️ watch · 💤 archive. |
+| 🎛️ **Contextual controls** | Buttons on the status message change with state: Stop/Watch while running; Re-run, Effort, Fork, Archive when done. The same six work as emoji reactions on any message. |
 | 🍴 **Fork a conversation** | 🍴 branches the thread: a new thread with a fork of this box, starting from the same filesystem. |
 | 🧪 **Slack-free testing** | `MemoryTransport` records everything the agent "says", so the whole pipeline is scriptable with no Slack app at all. |
 | 🔁 **Token rotation** | `ensureMcp` re-mints and re-registers at half-life, so long threads rotate instead of expiring mid-run. |
@@ -210,17 +210,25 @@ Say `stop` in a thread to interrupt the running agent.
 
 ## 🎛️ Emoji controls
 
-The bot seeds its status message with a row of reactions. Clicking one drives the sandbox, so
-there is no command syntax to remember:
+The status message carries buttons for whatever makes sense right now. While a run is going
+that is **Stop** and **Watch**; once it is over, stopping means nothing and the buttons become
+**Re-run**, **Effort**, **Fork**, and **Archive**. Fork and Archive open a native confirm
+dialog first, because one spends money and the other kills a live sandbox.
 
-| | Action | What happens |
-|---|---|---|
-| 🛑 | **Interrupt** | Stops the running agent and clears the queue |
-| ♻️ | **Re-run** | Re-issues the last prompt verbatim, at the same effort |
-| 🧠 | **Change effort** | Posts a dropdown; picking a level re-runs the last prompt at it |
-| 🍴 | **Fork** | Branches the conversation (see below) |
-| 🖥️ | **Watch** | Returns a desktop/VNC link for the sandbox |
-| 💤 | **Archive** | Snapshots and stops the box now instead of waiting out the idle timer |
+The same six actions also work as **emoji reactions on any message in the thread**, which
+buttons cannot do since they only live on the status message:
+
+| | Button | Action | What happens |
+|---|---|---|---|
+| 🛑 | Stop | **Interrupt** | Stops the running agent and clears the queue |
+| ♻️ | Re-run | **Re-run** | Re-issues the last prompt verbatim, at the same effort |
+| 🧠 | Effort | **Change effort** | Posts a dropdown; picking a level re-runs the last prompt at it |
+| 🍴 | Fork | **Fork** | Branches the conversation (see below) |
+| 🖥️ | Watch | **Watch** | Returns a desktop/VNC link for the sandbox |
+| 💤 | Archive | **Archive** | Snapshots and stops the box now instead of waiting out the idle timer |
+
+The reactions are not pre-seeded. Six emoji on every status message outlived their meaning,
+and pre-seeding the costly ones is an invitation to click them.
 
 Reactions are ordinary Events API events, so they arrive at `/slack/events` behind the same
 signature check and the same fail-closed allowlist as a mention. A reaction from someone the
@@ -331,7 +339,7 @@ PRs welcome. Before sending:
 
 ```bash
 npm run typecheck
-npm test           # 🧪 82 tests (node + a workerd project for the Durable Object)
+npm test           # 🧪 87 tests (node + a workerd project for the Durable Object)
 npm run smoke      # 🔍 verify Box API access and template
 ```
 
