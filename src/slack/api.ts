@@ -38,8 +38,10 @@ export class SlackClient {
   }
 
   /**
-   * Some Web API methods (notably files.getUploadURLExternal) reject a JSON body
-   * with `invalid_arguments` and require application/x-www-form-urlencoded.
+   * Several Web API methods reject a JSON body with `invalid_arguments` and require
+   * application/x-www-form-urlencoded. It is not only uploads: the read methods
+   * (`conversations.replies`, `chat.getPermalink`) behave the same way, and they fail
+   * quietly because their callers treat a miss as "no history" or "no link".
    */
   async callForm<T = Record<string, unknown>>(
     method: string,
@@ -72,7 +74,7 @@ export class SlackClient {
    * have produced.
    */
   async resolveThreadTs(channel: string, ts: string): Promise<string> {
-    const r = await this.call<{ messages?: { ts?: string; thread_ts?: string }[] }>(
+    const r = await this.callForm<{ messages?: { ts?: string; thread_ts?: string }[] }>(
       "conversations.replies",
       { channel, ts, limit: 1 },
     );
@@ -90,10 +92,15 @@ export class SlackClient {
     return { ts: r.ts };
   }
 
+  /** Rewrite a message anywhere, not just inside a `SlackTransport`'s own thread. */
+  async updateText(channel: string, ts: string, text: string): Promise<void> {
+    await this.call("chat.update", { channel, ts, text });
+  }
+
   /** Deep link to a thread, for pointing at a fork from the thread it came from. */
   async permalink(channel: string, ts: string): Promise<string | null> {
     try {
-      const r = await this.call<{ permalink?: string }>("chat.getPermalink", {
+      const r = await this.callForm<{ permalink?: string }>("chat.getPermalink", {
         channel,
         message_ts: ts,
       });
@@ -194,7 +201,7 @@ export class SlackTransport implements Transport {
   }
 
   async getThread(limit = 50): Promise<ThreadMessage[]> {
-    const r = await this.client.call<{
+    const r = await this.client.callForm<{
       messages: { ts: string; text?: string; user?: string; bot_id?: string }[];
     }>("conversations.replies", {
       channel: this.target.channel,

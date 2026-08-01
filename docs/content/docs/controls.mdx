@@ -92,12 +92,14 @@ that isn't a `block_actions` payload for a known action id is dropped.
 
 Branch a conversation without disturbing it. The bot:
 
-1. posts a **new top-level message** in the same channel, announcing who forked it;
+1. resolves a permalink to the source thread, then posts a **new top-level message** in
+   the same channel announcing who forked it and linking back;
 2. forks this thread's box, baking the *new* thread's id into the fork's env. The new
    thread has to be opened first, because box env is fixed at fork time;
 3. sets the TTL and a readable name on the fork;
 4. seeds a session on the new thread with `adoptFork`, recording what it was forked from;
-5. links the new thread from the old one.
+5. rewrites that announcement to name the new box, which is only known after the fork;
+6. links the new thread from the old one.
 
 The forked box starts from the current filesystem, so the new thread carries on from
 exactly where the old one was. Nothing runs in it until someone mentions the bot there.

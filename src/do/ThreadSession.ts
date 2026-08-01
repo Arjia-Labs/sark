@@ -21,6 +21,7 @@ import {
   type StatusPhase,
 } from "../slack/controls.ts";
 import { slackThreadId } from "../slack/events.ts";
+import { forkAnnouncement } from "./fork-message.ts";
 import { MemoryTransport, type ThreadMessage, type Transport } from "../transport.ts";
 
 const BOX_POLL_MS = 2_000;
@@ -552,12 +553,10 @@ export class ThreadSession extends DurableObject<Env> {
     const channel = s.slack.channel;
     const team = s.slack.team ?? "";
 
-    const head = await client.postToChannel(
-      channel,
-      actor
-        ? `🍴 <@${actor}> forked a sandbox into this thread. It starts from that conversation's filesystem — mention me here to carry on.`
-        : "🍴 Forked sandbox. Mention me here to carry on.",
-    );
+    // Link back to the thread this came from. Resolved before posting so the very first
+    // version of the announcement already carries it.
+    const sourceLink = await client.permalink(channel, s.slack.threadTs);
+    const head = await client.postToChannel(channel, forkAnnouncement({ actor, sourceLink }));
     const newThreadId = slackThreadId(team, channel, head.ts);
     const newSlack: SlackCoords = {
       team: s.slack.team,
@@ -588,8 +587,25 @@ export class ThreadSession extends DurableObject<Env> {
       forkedFrom: s.threadId,
     });
 
+    // Rewrite the announcement now that the box exists: its id is only known after the
+    // fork, and the new thread had to be opened first to name it.
+    try {
+      await client.updateText(
+        channel,
+        head.ts,
+        forkAnnouncement({ actor, sourceLink, boxId: forked.id }),
+      );
+    } catch (err) {
+      console.error("fork announcement update failed", (err as Error).message);
+    }
+
     const link = await client.permalink(channel, head.ts);
-    await this.say(s, `🍴 Forked into a new thread${link ? `: ${link}` : ""} · \`${forked.id}\``);
+    await this.say(
+      s,
+      link
+        ? `🍴 Forked into a new thread: ${link}\nIt has its own sandbox \`${forked.id}\`. This thread is untouched.`
+        : `🍴 Forked into a new thread with its own sandbox \`${forked.id}\`. This thread is untouched.`,
+    );
     return { ok: true, detail: newThreadId };
   }
 
