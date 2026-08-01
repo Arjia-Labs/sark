@@ -1,5 +1,9 @@
 import type { ThreadSession } from "./do/ThreadSession.ts";
 
+/** Caps. A single allowlisted channel member should not be able to run us out of anything. */
+export const MAX_PROMPT_CHARS = 16_000;
+export const MAX_QUEUED_PROMPTS = 20;
+
 export interface Env {
   THREAD_SESSIONS: DurableObjectNamespace<ThreadSession>;
 

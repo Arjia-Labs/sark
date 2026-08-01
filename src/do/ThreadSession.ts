@@ -10,7 +10,7 @@ import {
   type BoxState,
   type PromptStatus,
 } from "../box/client.ts";
-import { num, type Env } from "../config.ts";
+import { MAX_PROMPT_CHARS, MAX_QUEUED_PROMPTS, num, type Env } from "../config.ts";
 import { callTool } from "../mcp/tools.ts";
 import { buildPrompt } from "../prompt.ts";
 import { SlackClient, SlackTransport } from "../slack/api.ts";
@@ -33,9 +33,8 @@ const BOX_READY_TIMEOUT_MS = 180_000;
  */
 const TOKEN_REFRESH_MS = (THREAD_TOKEN_MAX_AGE_SECONDS / 2) * 1000;
 
-/** Caps. A single allowlisted channel member should not be able to run us out of anything. */
-export const MAX_PROMPT_CHARS = 16_000;
-export const MAX_QUEUED_PROMPTS = 20;
+/** Re-exported so existing importers keep working; defined in ../config.ts. */
+export { MAX_PROMPT_CHARS, MAX_QUEUED_PROMPTS };
 
 function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}\n\n[truncated at ${max} characters]`;

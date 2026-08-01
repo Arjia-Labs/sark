@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/typescript-5.7-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 5.7">
   <img src="https://img.shields.io/badge/cloudflare-workers-F38020?style=flat-square&logo=cloudflare&logoColor=white" alt="Cloudflare Workers">
   <img src="https://img.shields.io/badge/durable-objects-F38020?style=flat-square&logo=cloudflare&logoColor=white" alt="Durable Objects">
-  <img src="https://img.shields.io/badge/tests-87_passing-success?style=flat-square" alt="87 tests">
+  <img src="https://img.shields.io/badge/tests-96_passing-success?style=flat-square" alt="96 tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT licensed">
   <img src="https://img.shields.io/badge/slack-optional-4A154B?style=flat-square&logo=slack&logoColor=white" alt="Slack optional">
 </p>
@@ -339,7 +339,7 @@ PRs welcome. Before sending:
 
 ```bash
 npm run typecheck
-npm test           # 🧪 87 tests (node + a workerd project for the Durable Object)
+npm test           # 🧪 96 tests (node + a workerd project for the Durable Object)
 npm run smoke      # 🔍 verify Box API access and template
 ```
 
