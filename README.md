@@ -343,6 +343,9 @@ npm test           # 🧪 87 tests (node + a workerd project for the Durable Obj
 npm run smoke      # 🔍 verify Box API access and template
 ```
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for conventions, and [SECURITY.md](SECURITY.md) to
+report a vulnerability — please don't open a public issue for anything exploitable.
+
 ## 📜 License
 
 MIT — see [LICENSE](LICENSE).

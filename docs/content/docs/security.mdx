@@ -133,9 +133,11 @@ credential in the logs.
 
 ## Deliberate absences
 
-- **One interactive component, gated.** `/slack/interactive` exists only for the 🧠 effort
-  dropdown. It verifies the signature and runs the same `isAllowed` gate as a mention before
-  acting; anything that is not a `block_actions` payload for the known action id is dropped.
+- **One interactive route, gated.** `/slack/interactive` serves the status-message buttons
+  and the effort dropdown, nothing else. It verifies the signature and runs the same
+  `isAllowed` gate as a mention before acting; anything that is not a `block_actions` payload
+  for a known action id is dropped. The two destructive controls also carry a Block Kit
+  `confirm`, so reaching the handler takes a deliberate second click.
 - **Reactions cannot create anything.** A control reaction acts only on a thread that already
   has a session, and one from outside the allowlist is dropped *silently*. Replying would make
   any emoji in a public channel a way to make the bot talk.

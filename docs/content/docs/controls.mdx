@@ -1,31 +1,54 @@
 ---
-title: Emoji controls
-description: Six reactions that drive a thread, plus the one dropdown a reaction can't express.
+title: Controls
+description: Contextual buttons on the status message, the same six actions as reactions, and the one dropdown neither can express.
 ---
 
-Reactions are the control surface. They arrive as ordinary Events API events, so they add
-no new trust boundary: same signature check, same allowlist, same dedup as a mention.
-
-The bot seeds all six on its own status message, so they're discoverable without anyone
-having to read this page.
+Six actions drive a thread. They're reachable two ways: **buttons** on the status message,
+and **emoji reactions** on any message in the thread. Both land in the same
+`ThreadSession.control()`, behind the same signature check, the same allowlist, and the same
+`event_id` dedup as a mention.
 
 ## The six
 
-| | Reaction | Action |
-|---|---|---|
-| 🛑 | `octagonal_sign` | **Interrupt** the running agent. Same as typing `stop`. |
-| ♻️ | `recycle` | **Re-run** the last prompt, at the same effort as before. |
-| 🧠 | `brain` | **Escalate.** Offers a reasoning-effort picker to re-run at. |
-| 🍴 | `fork_and_knife` | **Fork** this conversation into a new thread with a copy of the filesystem. |
-| 🖥️ | `desktop_computer` | **Watch** the sandbox's desktop in a browser. |
-| 💤 | `zzz` | **Archive** the sandbox now, rather than waiting out the idle timer. |
+| | Button | Reaction | Action |
+|---|---|---|---|
+| 🛑 | `Stop` | `octagonal_sign` | **Interrupt** the running agent. Same as typing `stop`. |
+| ♻️ | `Re-run` | `recycle` | **Re-run** the last prompt, at the same effort as before. |
+| 🧠 | `Effort` | `brain` | **Escalate.** Offers a reasoning-effort picker to re-run at. |
+| 🍴 | `Fork` | `fork_and_knife` | **Fork** this conversation into a new thread with a copy of the filesystem. |
+| 🖥️ | `Watch` | `desktop_computer` | **Watch** the sandbox's desktop in a browser. |
+| 💤 | `Archive` | `zzz` | **Archive** the sandbox now, rather than waiting out the idle timer. |
 
-A reaction on **any** message in the thread works, not just the status message. Anything
-outside the six above is ignored, which is what keeps the `reactions:read` scope from being
-noisy. Skin-tone variants (`+::skin-tone-3`) are stripped before matching.
+## Buttons are contextual
 
-Reactions by the bot itself are ignored; otherwise seeding the affordances would trigger
-every one of them.
+The status message carries only the controls that mean something right now:
+
+| Phase | Buttons |
+|---|---|
+| A run is going | `Stop` · `Watch` |
+| The run is over | `Re-run` · `Effort` · `Fork` · `Archive` |
+
+`Stop` disappears once a run ends, because interrupting a finished run does nothing.
+
+`Fork` and `Archive` carry a Block Kit **`confirm`** object, so Slack renders a native
+dialog before the action fires. One spends money, the other kills a live sandbox. `Re-run`
+has no confirm: it's cheap and reversible, and a second click would only be friction.
+
+Slack requires `action_id` to be unique within a block, so each control has its own id
+(`sark_interrupt`, `sark_retry`, …) rather than sharing one and switching on `value`.
+
+<Callout>
+Reactions are **not pre-seeded**. Six emoji on every status message outlived their meaning,
+piled up across a long thread, cost six `reactions.add` calls per run, and put the two
+costly actions one stray click away.
+</Callout>
+
+## Reactions still work anywhere
+
+A reaction on **any** message in the thread works, which is the thing buttons can't do —
+they only exist on the status message. Anything outside the six is ignored, which is what
+keeps the `reactions:read` scope from being noisy. Skin-tone variants (`+::skin-tone-3`) are
+stripped before matching, and reactions by the bot itself are ignored.
 
 <Callout>
 **Controls fail closed.** A reaction on a thread with no session does nothing and creates
@@ -40,6 +63,8 @@ its `thread_ts`. So the thread has to be recovered before the Durable Object can
 addressed; `resolveThreadTs()` in `src/slack/api.ts` does that lookup. A reaction on a reply
 resolves to the thread that reply belongs to.
 
+Buttons need no such lookup: a `block_actions` payload carries `message.thread_ts` directly.
+
 ## ♻️ Re-run
 
 Re-running is **parked**, not sent directly: a `retry` record goes into storage and the
@@ -51,17 +76,17 @@ waking it is `ensureBox`'s job, not the control handler's.
 
 ## 🧠 Escalate
 
-A reaction can only ever mean one fixed thing, so 🧠 doesn't pick a level. It posts a
-Block Kit dropdown offering `low`, `medium`, `high`, `max`, noting the current effort if
-there is one. Selecting a level comes back through `/slack/interactive` and parks the same
-kind of retry.
+A button or a reaction can only ever mean one fixed thing, so `Effort` doesn't pick a level.
+It posts a Block Kit dropdown offering `low`, `medium`, `high`, `max`, noting the current
+effort if there is one. Selecting a level comes back through `/slack/interactive` and parks
+the same kind of retry.
 
 Which levels a given model accepts varies, so an unsupported value surfaces as a Box API
 error rather than being rejected up front.
 
-This is the **only** interactive component in the app. Its handler verifies the Slack
-signature and runs the same `isAllowed` gate as a mention before acting; anything that
-isn't a `block_actions` payload for the known action id is dropped.
+`/slack/interactive` handles both the dropdown and the status-message buttons. It verifies
+the Slack signature and runs the same `isAllowed` gate as a mention before acting; anything
+that isn't a `block_actions` payload for a known action id is dropped.
 
 ## 🍴 Fork
 
@@ -83,10 +108,18 @@ strand a running box.
 
 Forking needs Slack, since there's no channel to fork into otherwise.
 
+<Callout type="warn">
+A forked filesystem inherits the parent's MCP registration, so until it re-registers the
+fork holds a credential naming the *parent* thread. Forked sessions carry `pendingBootstrap`
+and re-register as soon as the box is ready rather than waiting for someone to speak. The
+window is the fork's provisioning time; it is not zero.
+</Callout>
+
 ## 🖥️ Desktop
 
 Asks the Box API for a desktop URL with public access and posts it, with a warning that
-anyone holding the link can view the sandbox.
+anyone holding the link can view the sandbox. The response field naming isn't pinned down in
+the public docs, so `url`, `desktopUrl`, and `vncUrl` are all accepted and normalized.
 
 ## 💤 Archive
 

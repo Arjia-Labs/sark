@@ -53,7 +53,7 @@ That makes the whole pipeline scriptable with no Slack workspace at all, and it 
 | `test/mcp.test.ts` | JSON-RPC handling, batches, notifications, limits, method dispatch |
 | `test/prompt.test.ts` | prompt shape, batched messages, delimiter neutralization, mention stripping |
 | `test/slack.test.ts` | event interpretation: what's ignored, what runs, thread id derivation |
-| `test/controls.test.ts` | emoji → action mapping, skin-tone stripping, effort levels |
+| `test/controls.test.ts` | emoji and button → action mapping, skin-tone stripping, contextual button sets, confirm dialogs on the destructive controls, effort levels |
 | `test/do/session.test.ts` | the `ThreadSession` state machine against real DO storage and alarms |
 
 ## What the tests can't cover

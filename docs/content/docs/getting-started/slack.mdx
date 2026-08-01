@@ -34,12 +34,13 @@ https://<your-worker>.workers.dev/slack/interactive
 ```
 
 <Callout>
-That route handles only the 🧠 reasoning-effort dropdown, which a reaction cannot express. It
-verifies the signature and runs the **same `isAllowed` gate** as a mention before acting on
-any payload.
+That route serves the status-message buttons and the reasoning-effort dropdown, nothing else.
+It verifies the signature and runs the **same `isAllowed` gate** as a mention before acting
+on any payload.
 </Callout>
 
-Emoji controls also need the `reactions:read` scope and the `reaction_added` bot event, both
+The buttons work with no extra scopes. Driving a thread by **reaction** additionally needs
+the `reactions:read` scope and the `reaction_added` bot event, both
 already in `slack-manifest.json`. Note that `reactions:read` means the app sees every
 reaction in allowlisted channels; only the six control emoji are ever acted on.
 

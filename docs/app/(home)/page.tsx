@@ -70,8 +70,8 @@ const categoryCards = [
     icon: '⌨',
   },
   {
-    title: 'Emoji controls',
-    description: 'Six reactions that drive a thread: stop, re-run, escalate, fork, watch, archive.',
+    title: 'Controls',
+    description: 'Six actions that drive a thread — stop, re-run, escalate, fork, watch, archive — as contextual buttons or reactions.',
     href: '/docs/controls',
     icon: '🛑',
   },
