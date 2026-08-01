@@ -11,8 +11,10 @@ and wait. Do not guess a Slack channel id, a billing plan, or an allowlist.
 - **Never print a secret value.** Not in output, not in a commit, not in a comment. Pipe
   secrets through stdin. If one is ever echoed, say so and tell the human to rotate it.
 - **Never commit `.dev.vars` or `.env`.** Both are gitignored. Keep it that way.
-- **Never put `account_id` in `wrangler.jsonc`.** Use the `CLOUDFLARE_ACCOUNT_ID`
-  environment variable so the file stays generic.
+- **Never put personal settings in `wrangler.jsonc`.** It is the public template. Worker
+  name, origin, allowlist, and template box id go in `.deploy.env` (gitignored) and are
+  injected by `npm run deploy`. `account_id` comes from `CLOUDFLARE_ACCOUNT_ID`.
+  `npm run check-config` enforces this, and it runs in CI.
 - If a command fails twice the same way, stop and report. Do not improvise around the
   Cloudflare or Box APIs.
 
@@ -98,7 +100,7 @@ expected to run with a placeholder** and is immediately followed by a second.
 npx wrangler secret put BOX_API_KEY        # paste the box_... key
 npx wrangler secret put MCP_TOKEN_SECRET   # any long random string
 npx wrangler secret put API_TOKEN          # guards /api
-npx wrangler deploy
+npx wrangler deploy --name sark            # first deploy, to learn the origin
 ```
 
 To set them non-interactively without the value reaching the transcript:
@@ -118,14 +120,16 @@ it claims a name on a shared namespace.
 
 ## Phase 4 — set PUBLIC_URL and redeploy
 
-Edit `wrangler.jsonc` and replace the placeholder with the origin from Phase 3:
+Put your settings in `.deploy.env` (gitignored — **never** edit `wrangler.jsonc` for this,
+it is the public template and CI fails if real values land in it):
 
-```jsonc
-"PUBLIC_URL": "https://sark.<subdomain>.workers.dev",
+```bash
+WORKER_NAME=sark
+PUBLIC_URL=https://sark.<subdomain>.workers.dev
 ```
 
 ```bash
-npx wrangler deploy
+npm run deploy
 curl -s https://sark.<subdomain>.workers.dev/health
 ```
 
@@ -162,13 +166,13 @@ bot or opens it up:
 - `ALLOWED_USERS` — comma-separated user ids (`U...`), optional
 - `ALLOWED_TEAMS` — workspace id (`T...`), optional but recommended
 
-Set them in `wrangler.jsonc` and redeploy. **The allowlist fails closed:** with both
+Set them in `.deploy.env` and redeploy with `npm run deploy`. **The allowlist fails closed:** with both
 `ALLOWED_CHANNELS` and `ALLOWED_USERS` empty, every mention is refused. That is deliberate —
 it is what stops a public channel from spinning up unbounded sandboxes. An empty allowlist is
 a working deployment that ignores everyone, not a broken one.
 
 ```bash
-npx wrangler deploy
+npm run deploy
 curl -s <origin>/health     # "slack" should now be true
 ```
 
@@ -199,7 +203,7 @@ box new              # install the stack, clone repos
 box stop <id>        # the stopped snapshot IS the template
 ```
 
-Set `TEMPLATE_BOX_ID` in `wrangler.jsonc` and redeploy. Keep the template stopped; to publish
+Set `TEMPLATE_BOX_ID` in `.deploy.env` and redeploy. Keep the template stopped; to publish
 a new version, resume it, update it, and stop it again.
 
 ## Tuning knobs

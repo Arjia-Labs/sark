@@ -6,12 +6,13 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "bash scripts/deploy.sh",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "smoke": "tsx scripts/box-smoke.ts",
     "drive": "tsx scripts/drive.ts",
-    "dev-vars": "bash scripts/dev-vars.sh"
+    "dev-vars": "bash scripts/dev-vars.sh",
+    "check-config": "bash scripts/check-config-clean.sh"
   },
   "dependencies": {
     "hono": "^4.6.14"

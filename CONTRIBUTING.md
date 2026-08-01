@@ -74,6 +74,22 @@ silent regression: that the allowlist still refuses when empty, that a token can
 its box generation, that button ids stay unique within a block. A test that just restates
 the code isn't worth the maintenance.
 
+## Local settings never go in git
+
+`wrangler.jsonc` is the public template: placeholder origin, empty allowlists, no
+`account_id`. Your real values live in `.deploy.env`, which is gitignored, and
+`npm run deploy` injects them as wrangler CLI overrides. One config file, so nothing drifts.
+
+`npm run check-config` fails if real values reach the tracked config. It runs in CI, and is
+worth installing locally:
+
+```bash
+ln -s ../../scripts/check-config-clean.sh .git/hooks/pre-commit
+```
+
+It reads the staged copy rather than your working tree, so editing the config locally is
+fine — only committing it is not.
+
 ## Security
 
 Don't open a public issue for anything exploitable — see [SECURITY.md](SECURITY.md).
