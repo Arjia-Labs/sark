@@ -87,6 +87,17 @@ Anything after `--` is passed straight to `wrangler deploy`. `WORKER_NAME` and `
 are required; the rest are optional and simply left at whatever `wrangler.jsonc` says, which
 for the allowlists is empty and therefore fails closed.
 
+## `tail` and `dev`: target your own worker
+
+```bash
+npm run tail              # live logs from your deployed worker
+npm run dev               # local dev server on :8787
+```
+
+Both read `WORKER_NAME` from `.deploy.env`. Calling `npx wrangler tail` directly looks up the
+placeholder name in `wrangler.jsonc` and fails with *"This Worker does not exist on your
+account"* (code 10007).
+
 ## `check-config`: keep the template clean
 
 ```bash
