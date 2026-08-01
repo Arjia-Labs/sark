@@ -12,10 +12,10 @@ import type { Env } from "../src/config.ts";
  * ordering look load-bearing. Swap the two branches and an unconfigured deployment silently
  * becomes an unauthenticated one, which is exactly the regression these catch.
  *
- * The app is invoked directly with a hand-built env, because the binding has to vary per
- * test and a worker's env is fixed once the runtime starts. That works here only because
- * `app.ts` has no runtime dependency on the Durable Object module - it imports the type,
- * not the class - so these run in plain node with no workerd.
+ * Uses Hono's own `app.request()` test helper, passing a hand-built env: the binding has to
+ * vary per test, and a worker's env is fixed once the runtime starts. That works here only
+ * because `app.ts` has no runtime dependency on the Durable Object module - it imports the
+ * type, not the class - so these run in plain node with no workerd.
  */
 
 const TOKEN = "test-api-token";
@@ -61,11 +61,9 @@ function call(
   token: string | null,
   apiToken: string | undefined,
 ) {
-  return app.fetch(
-    new Request(`https://example.com${path}`, {
-      method,
-      headers: token !== null ? { authorization: `Bearer ${token}` } : {},
-    }),
+  return app.request(
+    path,
+    { method, headers: token !== null ? { authorization: `Bearer ${token}` } : {} },
     envWith(apiToken),
     ctx,
   );
@@ -120,12 +118,13 @@ describe("/api with API_TOKEN unset", () => {
   it("refuses before any handler runs", async () => {
     // A prompt that got through would fork a real sandbox. 503 rather than 202 is proof
     // the middleware answered first.
-    const res = await app.fetch(
-      new Request("https://example.com/api/threads/t-auth-unreached/prompt", {
+    const res = await app.request(
+      "/api/threads/t-auth-unreached/prompt",
+      {
         method: "POST",
         headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
         body: JSON.stringify({ text: "this must not run" }),
-      }),
+      },
       envWith(undefined),
       ctx,
     );
@@ -135,18 +134,10 @@ describe("/api with API_TOKEN unset", () => {
   it("leaves the non-/api surface alone", async () => {
     // An unset API_TOKEN disables the scripting surface, not the bot: /health is public
     // and /mcp has its own gate.
-    const health = await app.fetch(
-      new Request("https://example.com/health"),
-      envWith(undefined),
-      ctx,
-    );
+    const health = await app.request("/health", {}, envWith(undefined), ctx);
     expect(health.status).toBe(200);
 
-    const mcp = await app.fetch(
-      new Request("https://example.com/mcp", { method: "POST" }),
-      envWith(undefined),
-      ctx,
-    );
+    const mcp = await app.request("/mcp", { method: "POST" }, envWith(undefined), ctx);
     expect(mcp.status).toBe(401);
   });
 });
