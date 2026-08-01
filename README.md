@@ -20,6 +20,11 @@
 </p>
 
 <p align="center">
+  <a href="https://arjia-labs.github.io/sark/"><img src="https://img.shields.io/badge/%F0%9F%93%96_Read_the_docs-arjia--labs.github.io%2Fsark-F38020?style=for-the-badge" alt="Documentation"></a>
+</p>
+
+<p align="center">
+  <a href="https://arjia-labs.github.io/sark/"><strong>Docs</strong></a> ·
   <a href="#-quickstart"><strong>Quickstart</strong></a> ·
   <a href="#-testing-without-slack"><strong>No-Slack testing</strong></a> ·
   <a href="#-api"><strong>API</strong></a> ·
